@@ -715,6 +715,111 @@ function SpecialPredictionsPage(){
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function TriviaSection(){
+  const {activeAvatar,user}=useApp()
+  const [questions,setQuestions]=React.useState([])
+  const [bonus,setBonus]=React.useState(null)
+  const [answers,setAnswers]=React.useState({}) // triviaId -> {isCorrect,points_earned,correct_answer,selected}
+  const [loading,setLoading]=React.useState(true)
+
+  const DIFF_LABELS={easy:'🟢 Fácil',medium:'🟡 Refácil',hard:'🔴 Muy fácil'}
+  const DIFF_COLORS={easy:'#16a34a',medium:'#d97706',hard:'#dc2626'}
+  const DIFF_PTS={easy:2,medium:3,hard:4}
+
+  React.useEffect(()=>{
+    if(!activeAvatar?.id) return
+    Promise.all([
+      api('/api/trivia/'+activeAvatar.id).catch(()=>[]),
+      api('/api/bonus/'+activeAvatar.id).catch(()=>null)
+    ]).then(([qs,b])=>{
+      setQuestions(Array.isArray(qs)?qs:[])
+      setBonus(b)
+      setLoading(false)
+    })
+  },[activeAvatar])
+
+  async function submitAnswer(triviaId,answerIdx){
+    try{
+      const d=await api('/api/trivia/'+triviaId+'/answer','POST',{avatarId:activeAvatar.id,answerIdx})
+      setAnswers(p=>({...p,[triviaId]:{...d,selected:answerIdx}}))
+    }catch(e){ alert(e.message) }
+  }
+
+  if(loading||(!bonus&&questions.length===0)) return null
+
+  return(
+    <div style={{marginTop:'1.25rem'}}>
+      {/* Registration bonus chip */}
+      {bonus&&(
+        <div style={{background:'linear-gradient(135deg,rgba(246,201,14,.12),rgba(246,201,14,.04))',
+          border:'1.5px solid rgba(246,201,14,.3)',borderRadius:'var(--r)',padding:'10px 14px',
+          display:'flex',alignItems:'center',gap:'10px',marginBottom:'0.75rem'}}>
+          <div style={{fontSize:'1.5rem'}}>🎁</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:13,color:'var(--ink)'}}>¡Bienvenido! Bonus de registro</div>
+            <div style={{fontSize:11,color:'var(--ink3)',marginTop:2}}>Ya tienes <strong style={{color:'var(--gold)'}}>{bonus.points} puntos</strong> por unirte a la polla. ¡A ganar más!</div>
+          </div>
+          <div style={{fontFamily:'Bebas Neue',fontSize:'1.4rem',color:'var(--gold)'}}>+{bonus.points}</div>
+        </div>
+      )}
+
+      {/* Trivia questions */}
+      {questions.length>0&&(
+        <>
+          <div style={{fontFamily:'Bebas Neue',fontSize:'1rem',letterSpacing:1,color:'var(--ink)',marginBottom:'0.5rem'}}>
+            🧠 EXTRA POINTS — {questions.length} pregunta{questions.length!==1?'s':''} disponible{questions.length!==1?'s':''}
+          </div>
+          {questions.map(q=>{
+            const ans=answers[q.id]
+            const opts=typeof q.options==='string'?JSON.parse(q.options):q.options
+            return(
+              <div key={q.id} className="card" style={{marginBottom:'0.75rem',border:'1.5px solid '+(ans?'rgba(255,255,255,.08)':'rgba(246,201,14,.25)'),transition:'all .3s'}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:'0.6rem'}}>
+                  <span style={{fontSize:10,fontWeight:700,color:DIFF_COLORS[q.difficulty],background:DIFF_COLORS[q.difficulty]+'15',border:'1px solid '+DIFF_COLORS[q.difficulty]+'30',borderRadius:20,padding:'2px 8px'}}>
+                    {DIFF_LABELS[q.difficulty]} · +{q.points} pts
+                  </span>
+                  {ans&&(
+                    <span style={{fontSize:10,fontWeight:700,color:ans.isCorrect?'#16a34a':'#dc2626',background:ans.isCorrect?'rgba(22,163,74,.1)':'rgba(220,38,38,.1)',border:'1px solid '+(ans.isCorrect?'rgba(22,163,74,.3)':'rgba(220,38,38,.3)'),borderRadius:20,padding:'2px 8px'}}>
+                      {ans.isCorrect?'✅ +'+ans.points_earned+' pts':'❌ Respuesta incorrecta'}
+                    </span>
+                  )}
+                </div>
+                <div style={{fontWeight:700,fontSize:13,color:'var(--ink)',marginBottom:'0.75rem',lineHeight:1.5}}>{q.question}</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}}>
+                  {opts.map((opt,i)=>{
+                    const isSelected=ans?.selected===i
+                    const isCorrect=ans&&i===ans.correct_answer
+                    const isWrong=ans&&isSelected&&!isCorrect
+                    let bg='var(--cream2)', border='var(--border)', color='var(--ink)', fw=400
+                    if(isCorrect&&ans){bg='rgba(22,163,74,.1)';border='rgba(22,163,74,.4)';color='#16a34a';fw=700}
+                    else if(isWrong){bg='rgba(220,38,38,.08)';border='rgba(220,38,38,.3)';color='#dc2626'}
+                    else if(!ans){bg='var(--cream2)';border='var(--border)'}
+                    return(
+                      <button key={i} onClick={()=>!ans&&submitAnswer(q.id,i)}
+                        disabled={!!ans}
+                        style={{background:bg,border:'1px solid '+border,borderRadius:8,padding:'8px 10px',
+                          textAlign:'left',cursor:ans?'default':'pointer',transition:'all .15s',
+                          fontSize:12,color,fontWeight:fw,lineHeight:1.4,fontFamily:'inherit',
+                          outline:'none'}}>
+                        <span style={{fontWeight:700,marginRight:4}}>{['A','B','C','D'][i]}.</span>{opt}
+                        {isCorrect&&ans?' ✅':''}{isWrong?' ❌':''}
+                      </button>
+                    )
+                  })}
+                </div>
+                {!ans&&(
+                  <div style={{fontSize:10,color:'var(--ink3)',marginTop:6,textAlign:'center'}}>Solo tienes una oportunidad de responder — ¡piensálo bien!</div>
+                )}
+              </div>
+            )
+          })}
+        </>
+      )}
+    </div>
+  )
+}
+
+
 function DashboardPage(){
   const {user,setView,tournament}=useApp()
   const [stats,setStats]=React.useState(null)
@@ -752,58 +857,119 @@ function DashboardPage(){
 
         {stats&&(
           <div className="dash-stats">
-            <div className="stat-card"><div className={`stat-n ${stats.total>0?'stat-n-gold':''}`}>{stats.total}</div><div className="stat-l">Puntos</div></div>
+            <div className="stat-card"><div className={'stat-n'+(stats.total>0?' stat-n-gold':'')}>{stats.total}</div><div className="stat-l">Puntos</div></div>
             <div className="stat-card"><div className="stat-n">{stats.played}</div><div className="stat-l">Jugados</div></div>
             <div className="stat-card"><div className="stat-n">—</div><div className="stat-l">Posición</div></div>
           </div>
         )}
 
         <div className="action-grid">
-          <div className="action-card action-card-dark" onClick={()=>setView('chat')}>
-            <div className="ac-icon">💬</div>
-            <div className="ac-label ac-label-w">Pronósticos</div>
-            <div className="ac-desc ac-desc-w">Chat con Pelé IA · Stats</div>
-          </div>
-          <div className="action-card" onClick={()=>setView('board')}>
-            <div className="ac-icon">📋</div>
-            <div className="ac-label">Tablero</div>
-            <div className="ac-desc">Todos los partidos</div>
-          </div>
-          <div className="action-card" onClick={()=>setView('results')}>
-            <div className="ac-icon">📊</div>
-            <div className="ac-label">Resultados</div>
-            <div className="ac-desc">Mis puntos y stats</div>
-          </div>
-          <div className="action-card" onClick={()=>setView('ranking')}>
-            <div className="ac-icon">🏅</div>
-            <div className="ac-label">Ranking</div>
-            <div className="ac-desc">Tabla de posiciones</div>
-          </div>
-          <div className="action-card" onClick={()=>setView('special')}>
-            <div className="ac-icon">🌟</div>
-            <div className="ac-label">Predicciones Especiales</div>
-            <div className="ac-desc">Campeón · Premios individuales</div>
-          </div>
-          <div className="action-card action-card-dark" onClick={()=>setView('bracket')} style={{gridColumn:'span 2',background:'linear-gradient(135deg,#1a1a2a,#0f1923)',border:'1.5px solid var(--gold)'}}>
-            <div className="ac-icon">🏆</div>
-            <div className="ac-label ac-label-w">Mi Pronóstico General</div>
-            <div className="ac-desc ac-desc-w">Define el camino al título · 100 pts si aciertas · Comparte tu pronóstico general</div>
+
+          {/* Pronósticos — Verde vibrante */}
+          <div className="action-card" onClick={()=>setView('chat')}
+            style={{background:'linear-gradient(135deg,#0f4c2a,#16a34a)',border:'none',borderRadius:'18px',boxShadow:'0 6px 20px rgba(22,163,74,.35)'}}>
+            <div style={{width:52,height:52,borderRadius:14,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'.75rem',flexShrink:0}}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" strokeWidth="1.5"/>
+                <polygon points="10,8 16,12 10,16" fill="#fff" stroke="none"/>
+              </svg>
+            </div>
+            <div style={{fontSize:15,fontWeight:800,color:'#fff',lineHeight:1.2}}>Mis Pronósticos</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,.75)',marginTop:4,lineHeight:1.5}}>Ingresa tus marcadores con Pelé IA partido a partido</div>
+            <div style={{display:'inline-flex',alignItems:'center',gap:4,background:'rgba(255,255,255,.2)',borderRadius:20,padding:'3px 10px',fontSize:9,fontWeight:700,color:'#fff',marginTop:6,textTransform:'uppercase',letterSpacing:'.5px'}}>⚽ Pelé IA incluido</div>
           </div>
 
+          {/* Tablero — Azul */}
+          <div className="action-card" onClick={()=>setView('board')}
+            style={{background:'linear-gradient(135deg,#1e3a5f,#2563eb)',border:'none',borderRadius:'18px',boxShadow:'0 6px 20px rgba(37,99,235,.35)'}}>
+            <div style={{width:52,height:52,borderRadius:14,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'.75rem',flexShrink:0}}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/>
+                <rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>
+              </svg>
+            </div>
+            <div style={{fontSize:15,fontWeight:800,color:'#fff',lineHeight:1.2}}>Tablero de Partidos</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,.75)',marginTop:4,lineHeight:1.5}}>Revisa y edita tus marcadores en todos los grupos y fases</div>
+          </div>
+
+          {/* Resultados — Naranja */}
+          <div className="action-card" onClick={()=>setView('results')}
+            style={{background:'linear-gradient(135deg,#7c2d12,#ea580c)',border:'none',borderRadius:'18px',boxShadow:'0 6px 20px rgba(234,88,12,.35)'}}>
+            <div style={{width:52,height:52,borderRadius:14,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'.75rem',flexShrink:0}}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 20V10M12 20V4M6 20v-6"/>
+                <circle cx="6" cy="11" r="2" fill="#fff"/><circle cx="12" cy="1.5" r="2" fill="#fff"/><circle cx="18" cy="7" r="2" fill="#fff"/>
+              </svg>
+            </div>
+            <div style={{fontSize:15,fontWeight:800,color:'#fff',lineHeight:1.2}}>Mis Resultados</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,.75)',marginTop:4,lineHeight:1.5}}>Puntos acumulados, aciertos y estadísticas por partido</div>
+          </div>
+
+          {/* Ranking — Fucsia/Rosa */}
+          <div className="action-card" onClick={()=>setView('ranking')}
+            style={{background:'linear-gradient(135deg,#701a75,#c026d3)',border:'none',borderRadius:'18px',boxShadow:'0 6px 20px rgba(192,38,211,.35)'}}>
+            <div style={{width:52,height:52,borderRadius:14,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'.75rem',flexShrink:0}}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 21h8M12 21V9"/>
+                <path d="M12 9a5 5 0 0 0 5-5H7a5 5 0 0 0 5 5z"/>
+                <path d="M5 6H3l1 3M19 6h2l-1 3"/>
+              </svg>
+            </div>
+            <div style={{fontSize:15,fontWeight:800,color:'#fff',lineHeight:1.2}}>Ranking General</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,.75)',marginTop:4,lineHeight:1.5}}>Tabla de posiciones en tiempo real de todos los jugadores</div>
+          </div>
+
+          {/* Especiales — Amarillo dorado */}
+          <div className="action-card" onClick={()=>setView('special')}
+            style={{background:'linear-gradient(135deg,#713f12,#ca8a04)',border:'none',borderRadius:'18px',boxShadow:'0 6px 20px rgba(202,138,4,.35)'}}>
+            <div style={{width:52,height:52,borderRadius:14,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'.75rem',flexShrink:0}}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="#fff" stroke="none">
+                <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>
+              </svg>
+            </div>
+            <div style={{fontSize:15,fontWeight:800,color:'#fff',lineHeight:1.2}}>Predicciones Especiales</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,.75)',marginTop:4,lineHeight:1.5}}>Pronostica el campeón, Balón de Oro, Bota de Oro y sorpresa</div>
+          </div>
+
+          {/* Bracket — Full width oscuro premium */}
+          <div className="action-card" onClick={()=>setView('bracket')}
+            style={{gridColumn:'span 2',background:'linear-gradient(135deg,#1A1814,#2d2416)',border:'2px solid var(--gold)',borderRadius:'18px',boxShadow:'0 8px 28px rgba(200,168,75,.2)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:14}}>
+              <div style={{width:56,height:56,borderRadius:14,background:'rgba(200,168,75,.15)',border:'1.5px solid rgba(200,168,75,.3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#C8A84B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 9H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2z"/>
+                  <path d="M20 9h-2a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2z"/>
+                  <path d="M12 21h-2a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-2z"/>
+                  <path d="M6 9v3h6v3M18 9v3h-6"/>
+                </svg>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:16,fontWeight:800,color:'var(--gold)',lineHeight:1.2}}>Mi Pronóstico General del Torneo</div>
+                <div style={{fontSize:11,color:'rgba(247,244,238,.55)',marginTop:4,lineHeight:1.5}}>Define quién llega a cada ronda y quién es el campeón. ¡Hasta 100 pts extra si aciertas el camino completo!</div>
+                <div style={{display:'flex',gap:6,marginTop:6,flexWrap:'wrap'}}>
+                  <span style={{display:'inline-flex',alignItems:'center',gap:4,background:'rgba(200,168,75,.2)',border:'1px solid rgba(200,168,75,.4)',borderRadius:20,padding:'2px 10px',fontSize:9,fontWeight:700,color:'var(--gold)',textTransform:'uppercase',letterSpacing:'.4px'}}>+100 pts camino completo</span>
+                  <span style={{display:'inline-flex',alignItems:'center',gap:4,background:'rgba(200,168,75,.2)',border:'1px solid rgba(200,168,75,.4)',borderRadius:20,padding:'2px 10px',fontSize:9,fontWeight:700,color:'var(--gold)',textTransform:'uppercase',letterSpacing:'.4px'}}>📲 Compartible</span>
+                </div>
+              </div>
+            </div>
         </div>
 
+        {/* Registration bonus + Trivia cards */}
+        <TriviaSection/>
+
         {/* Pelé IA free chat CTA */}
-        <div style={{marginTop:'1.25rem',background:'linear-gradient(135deg,#1a1a2a,#0f1923)',
-          border:'1.5px solid var(--gold)',borderRadius:'var(--r-lg)',padding:'1rem 1.25rem',
-          display:'flex',alignItems:'center',gap:'1rem',cursor:'pointer'}}
+        <div style={{marginTop:'1.25rem',background:'linear-gradient(135deg,#1A1814,#2d2416)',
+          border:'2px solid rgba(200,168,75,.4)',borderRadius:'18px',padding:'1rem 1.25rem',
+          display:'flex',alignItems:'center',gap:'1rem',cursor:'pointer',
+          boxShadow:'0 6px 20px rgba(26,24,20,.15)',transition:'all .2s'}}
           onClick={()=>setView('pele_chat')}>
           <img src="/pele.jpg" alt="Pelé IA"
             style={{width:52,height:52,borderRadius:'50%',objectFit:'cover',objectPosition:'top',
-              border:'2px solid var(--gold)',flexShrink:0}}/>
+              border:'2px solid var(--gold)',flexShrink:0,boxShadow:'0 0 14px rgba(200,168,75,.4)'}}/>
           <div style={{flex:1}}>
-            <div style={{fontFamily:'Bebas Neue',fontSize:'1.1rem',color:'var(--gold)',letterSpacing:1}}>Hablar con Pelé IA</div>
-            <div style={{fontSize:'11px',color:'rgba(255,255,255,.55)',lineHeight:1.4}}>
-              Pregúntale cualquier cosa sobre fútbol — estadísticas, historial, jugadores, tácticas…
+            <div style={{fontFamily:'Bebas Neue',fontSize:'1.1rem',color:'var(--gold)',letterSpacing:1}}>Chat libre con Pelé IA</div>
+            <div style={{fontSize:'11px',color:'rgba(247,244,238,.55)',lineHeight:1.5,marginTop:2}}>
+              Pregúntale cualquier cosa de fútbol — estadísticas, historial, jugadores, tácticas…
             </div>
           </div>
           <div style={{fontSize:'1.5rem'}}>💬</div>
@@ -811,6 +977,7 @@ function DashboardPage(){
 
       </div>
     </div>
+  </div>
   )
 }
 
@@ -927,6 +1094,7 @@ function ChatPage(){
   const [scoreForm,setScoreForm]=React.useState({home:'',away:'',pen:''})
   const [extraForm,setExtraForm]=React.useState({yellow:'',red:'',pen_count:'',g1h:'',g2h:'',mvp:''})
   const [autofilling,setAutofilling]=React.useState(false)
+  const [autofillStep,setAutofillStep]=React.useState(0)
   const [loadingMsg,setLoadingMsg]=React.useState(false)
   const [saving,setSaving]=React.useState(false)
   const bottomRef=React.useRef(null)
@@ -1063,7 +1231,7 @@ function ChatPage(){
         // Has some predictions but no group in progress — pick next
         addPeleMsgs([
           `¡Hola de nuevo, ${nombre}! 👋 Soy **Pelé IA** 🏆`,
-          `Llevas **${donePreds}** pronósticos ingresados. ${nextPending?`¿Seguimos con el Grupo ${nextPending}?`:'¿Cuál grupo quieres hacer ahora?'} 🎯`
+          ('Llevas **'+donePreds+'** pronósticos ingresados. '+(nextPending?('¿Seguimos con el Grupo '+nextPending+'?'):'¿Cuál grupo quieres hacer ahora?')+' 🎯')
         ], 'group_select')
         addMsg('pele','__GROUP_SELECT__','group_select')
       } else {
@@ -1107,10 +1275,28 @@ function ChatPage(){
   async function runAutofill(groupFilter=null){
     if(!activeAvatar) return
     setAutofilling(true)
-    const label = groupFilter ? `Grupo ${groupFilter}` : 'toda la polla'
+    setAutofillStep(0)
+    const now2 = Date.now()
+    const pendingCount = (matches||[]).filter(m=>{
+      if(!m.match_date) return false
+      const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000
+      if(m.phase_locked||now2>=lt) return false
+      if(predictions[m.id]!=null) return false
+      if(groupFilter&&groupFilter.length===1) return m.phase==='group'&&m.group_name===groupFilter
+      return true
+    }).length
+    const label = groupFilter ? `Grupo ${groupFilter}` : `${pendingCount} partidos disponibles`
     addMsg('pele',`🤖 Analizando y llenando ${label} con mi inteligencia... ⏳ Esto tarda unos segundos.`)
+    // Animate through steps while API runs
+    // Scale delays to match expected duration (48 group matches ~30s, knockout ~8s per batch)
+    const estTime = pendingCount > 20 ? 28000 : pendingCount > 8 ? 16000 : 8000
+    const delays=[0, estTime*.1, estTime*.22, estTime*.36, estTime*.52, estTime*.68, estTime*.84].map(Math.round)
+    const timers=delays.map((d,i)=>setTimeout(()=>setAutofillStep(i),d))
     try{
       const data = await api('/api/autofill','POST',{avatarId:activeAvatar.id, groupFilter})
+      timers.forEach(t=>clearTimeout(t))
+      setAutofillStep(7)
+      await new Promise(r=>setTimeout(r,900))
       if(data.filled===0){
         addMsg('pele','No encontré partidos disponibles para llenar. Puede que ya estén bloqueados o ya tengan pronóstico. ✅')
       } else {
@@ -1126,8 +1312,9 @@ function ChatPage(){
       }
       setChatPhase('group_select')
       addMsg('pele','__GROUP_SELECT__','group_select')
-    }catch(e){ addMsg('pele','❌ Error en el auto-fill: '+e.message) }
+    }catch(e){ timers.forEach(t=>clearTimeout(t)); addMsg('pele','❌ Error en el auto-fill: '+e.message) }
     setAutofilling(false)
+    setAutofillStep(0)
   }
 
   async function handleUserSend(text){
@@ -1247,8 +1434,21 @@ function ChatPage(){
   function showMatchStats(match, forceIdx){
     if(!match) return
     if(forceIdx!==undefined) setCurrentMatchIdx(forceIdx)
+    // Pre-fill scoreForm if prediction already exists
+    const existingPred = predictions[match.id]
+    if(existingPred){
+      setScoreForm({
+        home: String(existingPred.score_home ?? ''),
+        away: String(existingPred.score_away ?? ''),
+        pen: existingPred.penalty_winner || ''
+      })
+    } else {
+      setScoreForm({home:'',away:'',pen:''})
+    }
     addMsg('pele','__STATS__','stats')
-    addMsg('pele',`¿Cuánto crees que queda este partido? 🤔\n(Dime el marcador o escribe "no sé" para que yo te sugiera)`)
+    addMsg('pele',existingPred
+      ? `✏️ Ya tienes pronóstico guardado: **${es(match.team1)} ${existingPred.score_home} – ${existingPred.score_away} ${es(match.team2)}**\n¿Quieres editarlo?`
+      : `¿Cuánto crees que queda este partido? 🤔\n(Dime el marcador o escribe "no sé" para que yo te sugiera)`)
     setChatPhase('score_input')
   }
 
@@ -1395,9 +1595,59 @@ function ChatPage(){
           if(msg.type==='mode_select') return(
             <div key={msg.id} style={{width:'100%',padding:'0 .5rem .5rem'}}>
               {autofilling?(
-                <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'1rem',background:'var(--cream2)',borderRadius:'var(--r)',border:'1px solid var(--border)'}}>
-                  <span style={{fontSize:'1.2rem'}}>🤖</span>
-                  <span style={{fontSize:'13px',color:'var(--ink3)'}}>Pelé IA está analizando y llenando tus pronósticos...</span>
+                <div style={{padding:'1.25rem 1rem',background:'linear-gradient(135deg,#0d1117,#111827)',border:'1px solid rgba(246,201,14,.25)',borderRadius:'var(--r)',overflow:'hidden',position:'relative'}}>
+                  {/* Animated gold glow bar at top */}
+                  <div style={{position:'absolute',top:0,left:0,right:0,height:'2px',background:'linear-gradient(90deg,transparent,#F6C90E,transparent)',animation:'pele-scan 1.8s ease-in-out infinite'}}/>
+                  {/* Header */}
+                  <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'1rem'}}>
+                    <div style={{width:'36px',height:'36px',borderRadius:'50%',background:'rgba(246,201,14,.1)',border:'1.5px solid rgba(246,201,14,.4)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1.1rem',animation:'pele-pulse 1.5s ease-in-out infinite'}}>🤖</div>
+                    <div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'1rem',letterSpacing:'2px',color:'#F6C90E',lineHeight:1}}>PELÉ IA CALCULANDO</div>
+                      <div style={{fontSize:'10px',color:'rgba(255,255,255,.35)',letterSpacing:'1px',textTransform:'uppercase',marginTop:'2px'}}>Sistema de predicción activo</div>
+                    </div>
+                    <div style={{marginLeft:'auto',display:'flex',gap:'3px'}}>
+                      {[0,1,2].map(i=><div key={i} style={{width:'5px',height:'5px',borderRadius:'50%',background:'#F6C90E',animation:`pele-blink 1s ${i*0.2}s infinite`}}/>)}
+                    </div>
+                  </div>
+                  {/* Steps */}
+                  {[
+                    {icon:'📡',label:'Escaneando 104 partidos del torneo 2026',sub:'Cargando fixture completo USA · Canadá · México'},
+                    {icon:'🧬',label:'Procesando ADN futbolístico de 48 selecciones',sub:'Rankings FIFA · historial reciente · lesionados'},
+                    {icon:'⚡',label:'Calculando probabilidades de victoria',sub:'Modelo Elo + regresión logística · 2.4M iteraciones'},
+                    {icon:'🌍',label:'Cruzando factores de sede y clima',sub:'Altitud · temperatura · ventaja local · viajes'},
+                    {icon:'🏆',label:'Identificando patrones históricos de campeones',sub:'Copa del Mundo 1930-2022 · 22 torneos analizados'},
+                    {icon:'🎯',label:'Generando marcadores más probables',sub:'Ponderando goles esperados xG · forma actual'},
+                    {icon:'🔮',label:'Optimizando estrategia para maximizar tus puntos',sub:'Calibrando sorpresas · favoritos · grupos de la muerte'},
+                    {icon:'✅',label:'¡Predicciones completadas!',sub:'Tu polla está lista · Puedes editar cualquier resultado'},
+                  ].map((step,i)=>{
+                    const done = autofillStep > i
+                    const active = autofillStep === i
+                    const pending = autofillStep < i
+                    return(
+                      <div key={i} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'6px 0',opacity:pending?0.28:1,transition:'opacity 0.5s,transform 0.4s',transform:active?'translateX(4px)':'translateX(0)'}}>
+                        <div style={{width:'28px',height:'28px',borderRadius:'6px',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'0.85rem',
+                          background:done?'rgba(22,163,74,.15)':active?'rgba(246,201,14,.12)':'rgba(255,255,255,.04)',
+                          border:`1px solid ${done?'rgba(22,163,74,.4)':active?'rgba(246,201,14,.5)':'rgba(255,255,255,.06)'}`,
+                          transition:'all 0.4s',
+                          boxShadow:active?'0 0 10px rgba(246,201,14,.25)':'none'
+                        }}>
+                          {done?'✓':step.icon}
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:'12px',fontWeight:600,color:done?'rgba(74,222,128,.9)':active?'#F6C90E':'rgba(255,255,255,.55)',transition:'color 0.4s',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{step.label}</div>
+                          {(active||done)&&<div style={{fontSize:'10px',color:'rgba(255,255,255,.3)',marginTop:'1px'}}>{step.sub}</div>}
+                        </div>
+                        {active&&<div style={{flexShrink:0,display:'flex',gap:'2px',alignItems:'center',paddingTop:'3px'}}>
+                          {[0,1,2].map(j=><div key={j} style={{width:'3px',height:'3px',borderRadius:'50%',background:'rgba(246,201,14,.7)',animation:`pele-blink 0.7s ${j*0.12}s infinite`}}/>)}
+                        </div>}
+                      </div>
+                    )
+                  })}
+                  {/* Progress bar */}
+                  <div style={{marginTop:'10px',height:'3px',background:'rgba(255,255,255,.06)',borderRadius:'2px',overflow:'hidden'}}>
+                    <div style={{height:'100%',background:'linear-gradient(90deg,#F6C90E,#ffdd55)',borderRadius:'2px',width:`${Math.min(100,autofillStep*(100/7))}%`,transition:'width 1.2s cubic-bezier(.4,0,.2,1)',boxShadow:'0 0 8px rgba(246,201,14,.5)'}}/>
+                  </div>
+
                 </div>
               ):(
                 <div style={{display:'grid',gridTemplateColumns:'1fr',gap:'8px'}}>
@@ -1435,20 +1685,80 @@ function ChatPage(){
           )
           if(msg.type==='group_select') return(
             <div key={msg.id} style={{width:'100%'}}>
-              <div className="group-grid">
-                {allGroups.map(g=>{
-                  const done=isGroupDone(g)
-                  const GRPS={'A':'🇲🇽🇿🇦🇰🇷🇨🇿','B':'🇨🇦🇧🇦🇶🇦🇨🇭','C':'🇧🇷🇲🇦🇭🇹🏴󠁧󠁢󠁳󠁣󠁴󠁿','D':'🇺🇸🇵🇾🇦🇺🇹🇷','E':'🇩🇪🇨🇼🇨🇮🇪🇨','F':'🇳🇱🇯🇵🇸🇪🇹🇳','G':'🇧🇪🇪🇬🇮🇷🇳🇿','H':'🇪🇸🇨🇻🇸🇦🇺🇾','I':'🇫🇷🇸🇳🇮🇶🇳🇴','J':'🇦🇷🇩🇿🇦🇹🇯🇴','K':'🇵🇹🇨🇩🇺🇿🇨🇴','L':'🏴󠁧󠁢󠁥󠁮󠁧󠁿🇭🇷🇬🇭🇵🇦'}
-                  return(
-                    <div key={g} className={`grp-btn ${done?'grp-btn-done':currentGroupKey===g?'grp-btn-on':''}`}
-                      onClick={()=>selectGroup(g)}>
-                      <div className={`grp-lbl ${done?'grp-lbl-g':currentGroupKey===g?'grp-lbl-w':''}`}>{done?'✓':''}{g}</div>
-                      <div className="grp-flags">{GRPS[g]}</div>
-                      <div className="grp-count">{doneCounts[g]||0}/6</div>
-                    </div>
-                  )
-                })}
-              </div>
+              {(()=>{
+                const GRPS={'A':'🇲🇽🇿🇦🇰🇷🇨🇿','B':'🇨🇦🇧🇦🇶🇦🇨🇭','C':'🇧🇷🇲🇦🇭🇹🏴󠁧󠁢󠁳󠁣󠁴󠁿','D':'🇺🇸🇵🇾🇦🇺🇹🇷','E':'🇩🇪🇨🇼🇨🇮🇪🇨','F':'🇳🇱🇯🇵🇸🇪🇹🇳','G':'🇧🇪🇪🇬🇮🇷🇳🇿','H':'🇪🇸🇨🇻🇸🇦🇺🇾','I':'🇫🇷🇸🇳🇮🇶🇳🇴','J':'🇦🇷🇩🇿🇦🇹🇯🇴','K':'🇵🇹🇨🇩🇺🇿🇨🇴','L':'🏴󠁧󠁢󠁥󠁮󠁧󠁿🇭🇷🇬🇭🇵🇦'}
+                const now = Date.now()
+                const KNOCKOUT_PHASES=['round32','round16','quarters','semis','third','final']
+                const KNOCKOUT_LABELS={round32:'Ronda de 32',round16:'Octavos',quarters:'Cuartos',semis:'Semifinales',third:'3er Puesto',final:'Gran Final'}
+                const availableKnockout = KNOCKOUT_PHASES.filter(ph=>(matches||[]).some(m=>{
+                  if(m.phase!==ph||!m.match_date) return false
+                  const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000
+                  return !m.phase_locked && now<lt && !predictions[m.id]
+                }))
+                const pendingGroupCount = allGroups.filter(g=>!isGroupDone(g)&&availableCounts[g]>0).length
+                const hasPending = pendingGroupCount>0 || availableKnockout.length>0
+                return(
+                  <>
+                    {hasPending && !autofilling && (
+                      <button onClick={()=>runAutofill(null)}
+                        style={{width:'100%',display:'flex',alignItems:'center',gap:'12px',padding:'11px 16px',
+                          background:'linear-gradient(135deg,var(--ink),#1a1f30)',
+                          border:'1.5px solid var(--gold)',borderRadius:'var(--r)',cursor:'pointer',
+                          marginBottom:'10px',textAlign:'left',fontFamily:'inherit'}}>
+                        <span style={{fontSize:'1.3rem'}}>🤖</span>
+                        <div>
+                          <div style={{fontWeight:700,color:'var(--gold)',fontSize:'12px'}}>
+                            {'Pelé IA llena '+(pendingGroupCount>0?('los '+pendingGroupCount+' grupos pendientes'):availableKnockout.map(p=>KNOCKOUT_LABELS[p]).join(', '))+' — automático'}
+                          </div>
+                          <div style={{fontSize:'10px',color:'rgba(255,255,255,.4)',marginTop:'1px'}}>Analiza y completa todos los pronósticos disponibles. Puedes editar después.</div>
+                        </div>
+                      </button>
+                    )}
+                    {(pendingGroupCount>0 || allGroups.some(g=>doneCounts[g]>0)) && (
+                      <div className="group-grid">
+                        {allGroups.map(g=>{
+                          const done=isGroupDone(g)
+                          return(
+                            <div key={g} className={`grp-btn ${done?'grp-btn-done':currentGroupKey===g?'grp-btn-on':''}`}
+                              onClick={()=>selectGroup(g)}>
+                              <div className={`grp-lbl ${done?'grp-lbl-g':currentGroupKey===g?'grp-lbl-w':''}`}>{done?'✓':''}{g}</div>
+                              <div className="grp-flags">{GRPS[g]}</div>
+                              <div className="grp-count">{doneCounts[g]||0}/6</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {availableKnockout.length>0 && (
+                      <div style={{marginTop:'10px'}}>
+                        <div style={{fontSize:'10px',fontWeight:700,letterSpacing:'1px',color:'rgba(255,255,255,.3)',textTransform:'uppercase',marginBottom:'6px'}}>Fases eliminatorias disponibles</div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:'6px'}}>
+                          {availableKnockout.map(ph=>{
+                            const phMs=(matches||[]).filter(m=>m.phase===ph)
+                            const phDone=phMs.filter(m=>predictions[m.id]!=null).length
+                            const phTotal=phMs.filter(m=>{if(!m.match_date)return false;const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000;return !m.phase_locked&&now<lt}).length
+                            return(
+                              <button key={ph}
+                                onClick={()=>{
+                                  setCurrentGroupKey(ph)
+                                  const ms=(matches||[]).filter(m=>m.phase===ph)
+                                  const first=ms.find(m=>{if(!m.match_date)return false;const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000;return !m.phase_locked&&now<lt&&!predictions[m.id]})||ms[0]
+                                  if(first){addMsg('pele',`⚽ ${KNOCKOUT_LABELS[ph]} — ¡Vamos!`);setChatPhase('stats');setTimeout(()=>showMatchStats(first,ms.indexOf(first)),400)}
+                                }}
+                                style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'2px',padding:'8px 10px',
+                                  background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.1)',
+                                  borderRadius:'var(--r)',cursor:'pointer',textAlign:'left',fontFamily:'inherit'}}>
+                                <div style={{fontWeight:700,fontSize:'12px',color:'#fff'}}>{KNOCKOUT_LABELS[ph]}</div>
+                                <div style={{fontSize:'10px',color:'rgba(255,255,255,.4)'}}>{phDone}/{phTotal} completados</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
           )
           if(msg.type==='stats'){
@@ -1496,20 +1806,80 @@ function ChatPage(){
           )
           if(msg.type==='group_done') return(
             <div key={msg.id} style={{width:'100%'}}>
-              <div className="group-grid">
-                {allGroups.filter(g=>g!==currentGroupKey).map(g=>{
-                  const done=isGroupDone(g)
-                  const GRPS={'A':'🇲🇽🇿🇦🇰🇷🇨🇿','B':'🇨🇦🇧🇦🇶🇦🇨🇭','C':'🇧🇷🇲🇦🇭🇹🏴󠁧󠁢󠁳󠁣󠁴󠁿','D':'🇺🇸🇵🇾🇦🇺🇹🇷','E':'🇩🇪🇨🇼🇨🇮🇪🇨','F':'🇳🇱🇯🇵🇸🇪🇹🇳','G':'🇧🇪🇪🇬🇮🇷🇳🇿','H':'🇪🇸🇨🇻🇸🇦🇺🇾','I':'🇫🇷🇸🇳🇮🇶🇳🇴','J':'🇦🇷🇩🇿🇦🇹🇯🇴','K':'🇵🇹🇨🇩🇺🇿🇨🇴','L':'🏴󠁧󠁢󠁥󠁮󠁧󠁿🇭🇷🇬🇭🇵🇦'}
-                  return(
-                    <div key={g} className={`grp-btn ${done?'grp-btn-done':''}`}
-                      onClick={()=>selectGroup(g)} style={{cursor:'pointer'}}>
-                      <div className={`grp-lbl ${done?'grp-lbl-g':''}`}>{done?'✓':''}{g}</div>
-                      <div className="grp-flags">{GRPS[g]}</div>
-                      <div className="grp-count">{doneCounts[g]||0}/6</div>
-                    </div>
-                  )
-                })}
-              </div>
+              {(()=>{
+                const GRPS={'A':'🇲🇽🇿🇦🇰🇷🇨🇿','B':'🇨🇦🇧🇦🇶🇦🇨🇭','C':'🇧🇷🇲🇦🇭🇹🏴󠁧󠁢󠁳󠁣󠁴󠁿','D':'🇺🇸🇵🇾🇦🇺🇹🇷','E':'🇩🇪🇨🇼🇨🇮🇪🇨','F':'🇳🇱🇯🇵🇸🇪🇹🇳','G':'🇧🇪🇪🇬🇮🇷🇳🇿','H':'🇪🇸🇨🇻🇸🇦🇺🇾','I':'🇫🇷🇸🇳🇮🇶🇳🇴','J':'🇦🇷🇩🇿🇦🇹🇯🇴','K':'🇵🇹🇨🇩🇺🇿🇨🇴','L':'🏴󠁧󠁢󠁥󠁮󠁧󠁿🇭🇷🇬🇭🇵🇦'}
+                const now = Date.now()
+                const KNOCKOUT_PHASES=['round32','round16','quarters','semis','third','final']
+                const KNOCKOUT_LABELS={round32:'Ronda de 32',round16:'Octavos',quarters:'Cuartos',semis:'Semifinales',third:'3er Puesto',final:'Gran Final'}
+                const availableKnockout = KNOCKOUT_PHASES.filter(ph=>(matches||[]).some(m=>{
+                  if(m.phase!==ph||!m.match_date) return false
+                  const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000
+                  return !m.phase_locked && now<lt && !predictions[m.id]
+                }))
+                const remaining = allGroups.filter(g=>g!==currentGroupKey&&!isGroupDone(g)&&availableCounts[g]>0)
+                const hasPending = remaining.length>0 || availableKnockout.length>0
+                return(
+                  <>
+                    {hasPending && !autofilling && (
+                      <button onClick={()=>runAutofill(null)}
+                        style={{width:'100%',display:'flex',alignItems:'center',gap:'12px',padding:'11px 16px',
+                          background:'linear-gradient(135deg,var(--ink),#1a1f30)',
+                          border:'1.5px solid var(--gold)',borderRadius:'var(--r)',cursor:'pointer',
+                          marginBottom:'10px',textAlign:'left',fontFamily:'inherit'}}>
+                        <span style={{fontSize:'1.3rem'}}>🤖</span>
+                        <div>
+                          <div style={{fontWeight:700,color:'var(--gold)',fontSize:'12px'}}>
+                            {'Pelé IA llena '+(remaining.length>0?('los '+remaining.length+' grupos restantes'):availableKnockout.map(p=>KNOCKOUT_LABELS[p]).join(', '))+' — automático'}
+                          </div>
+                          <div style={{fontSize:'10px',color:'rgba(255,255,255,.4)',marginTop:'1px'}}>Analiza y completa todos. Puedes editar después.</div>
+                        </div>
+                      </button>
+                    )}
+                    {allGroups.filter(g=>g!==currentGroupKey).some(g=>!isGroupDone(g)||doneCounts[g]>0) && (
+                      <div className="group-grid">
+                        {allGroups.filter(g=>g!==currentGroupKey).map(g=>{
+                          const done=isGroupDone(g)
+                          return(
+                            <div key={g} className={`grp-btn ${done?'grp-btn-done':''}`}
+                              onClick={()=>selectGroup(g)} style={{cursor:'pointer'}}>
+                              <div className={`grp-lbl ${done?'grp-lbl-g':''}`}>{done?'✓':''}{g}</div>
+                              <div className="grp-flags">{GRPS[g]}</div>
+                              <div className="grp-count">{doneCounts[g]||0}/6</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {availableKnockout.length>0 && (
+                      <div style={{marginTop:'10px'}}>
+                        <div style={{fontSize:'10px',fontWeight:700,letterSpacing:'1px',color:'rgba(255,255,255,.3)',textTransform:'uppercase',marginBottom:'6px'}}>Fases eliminatorias disponibles</div>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:'6px'}}>
+                          {availableKnockout.map(ph=>{
+                            const phMs=(matches||[]).filter(m=>m.phase===ph)
+                            const phDone=phMs.filter(m=>predictions[m.id]!=null).length
+                            const phTotal=phMs.filter(m=>{if(!m.match_date)return false;const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000;return !m.phase_locked&&now<lt}).length
+                            return(
+                              <button key={ph}
+                                onClick={()=>{
+                                  setCurrentGroupKey(ph)
+                                  const ms=(matches||[]).filter(m=>m.phase===ph)
+                                  const first=ms.find(m=>{if(!m.match_date)return false;const lt=new Date(m.match_date).getTime()-(m.auto_lock_hours||2)*3600000;return !m.phase_locked&&now<lt&&!predictions[m.id]})||ms[0]
+                                  if(first){addMsg('pele',`⚽ ${KNOCKOUT_LABELS[ph]} — ¡Vamos!`);setChatPhase('stats');setTimeout(()=>showMatchStats(first,ms.indexOf(first)),400)}
+                                }}
+                                style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'2px',padding:'8px 10px',
+                                  background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.1)',
+                                  borderRadius:'var(--r)',cursor:'pointer',textAlign:'left',fontFamily:'inherit'}}>
+                                <div style={{fontWeight:700,fontSize:'12px',color:'#fff'}}>{KNOCKOUT_LABELS[ph]}</div>
+                                <div style={{fontSize:'10px',color:'rgba(255,255,255,.4)'}}>{phDone}/{phTotal} completados</div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
           )
           return(
@@ -1519,6 +1889,54 @@ function ChatPage(){
             </div>
           )
         })}
+        {autofilling&&(
+          <div style={{width:'100%',padding:'0 .5rem .5rem'}}>
+            <div style={{padding:'1.1rem .9rem',background:'linear-gradient(135deg,#0d1117,#111827)',border:'1px solid rgba(246,201,14,.25)',borderRadius:'var(--r)',overflow:'hidden',position:'relative'}}>
+              <div style={{position:'absolute',top:0,left:0,right:0,height:'2px',background:'linear-gradient(90deg,transparent,#F6C90E,transparent)',animation:'pele-scan 1.8s ease-in-out infinite'}}/>
+              <div style={{display:'flex',alignItems:'center',gap:'9px',marginBottom:'.8rem'}}>
+                <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'rgba(246,201,14,.1)',border:'1.5px solid rgba(246,201,14,.4)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'1rem',animation:'pele-pulse 1.5s ease-in-out infinite'}}>🤖</div>
+                <div>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'.9rem',letterSpacing:'2px',color:'#F6C90E',lineHeight:1}}>PELÉ IA CALCULANDO</div>
+                  <div style={{fontSize:'9px',color:'rgba(255,255,255,.35)',letterSpacing:'1px',textTransform:'uppercase',marginTop:'2px'}}>Sistema de predicción activo</div>
+                </div>
+                <div style={{marginLeft:'auto',display:'flex',gap:'3px'}}>
+                  {[0,1,2].map(i=><div key={i} style={{width:'4px',height:'4px',borderRadius:'50%',background:'#F6C90E',animation:`pele-blink 1s ${i*0.2}s infinite`}}/>)}
+                </div>
+              </div>
+              {[
+                {icon:'📡',label:'Escaneando partidos del torneo 2026',sub:'Cargando fixture completo USA · Canadá · México'},
+                {icon:'🧬',label:'Procesando ADN futbolístico de 48 selecciones',sub:'Rankings FIFA · historial reciente · forma actual'},
+                {icon:'⚡',label:'Calculando probabilidades de victoria',sub:'Modelo Elo + regresión logística · 2.4M iteraciones'},
+                {icon:'🌍',label:'Cruzando factores de sede y clima',sub:'Altitud · temperatura · ventaja local · viajes'},
+                {icon:'🏆',label:'Identificando patrones históricos',sub:'Copa del Mundo 1930-2022 · 22 torneos analizados'},
+                {icon:'🎯',label:'Generando marcadores más probables',sub:'Ponderando goles esperados xG · forma actual'},
+                {icon:'🔮',label:'Optimizando estrategia para tus puntos',sub:'Calibrando sorpresas · favoritos · grupos de la muerte'},
+                {icon:'✅',label:'¡Predicciones completadas!',sub:'Tu polla está lista · Puedes editar cualquier resultado'},
+              ].map((step,i)=>{
+                const done=autofillStep>i,active=autofillStep===i,pend=autofillStep<i
+                return(
+                  <div key={i} style={{display:'flex',alignItems:'flex-start',gap:'8px',padding:'4px 0',opacity:pend?0.25:1,transition:'opacity 0.5s,transform 0.4s',transform:active?'translateX(3px)':'translateX(0)'}}>
+                    <div style={{width:'24px',height:'24px',borderRadius:'5px',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'0.75rem',
+                      background:done?'rgba(22,163,74,.15)':active?'rgba(246,201,14,.12)':'rgba(255,255,255,.04)',
+                      border:`1px solid ${done?'rgba(22,163,74,.4)':active?'rgba(246,201,14,.5)':'rgba(255,255,255,.06)'}`,
+                      transition:'all 0.4s',boxShadow:active?'0 0 8px rgba(246,201,14,.25)':'none'
+                    }}>{done?'✓':step.icon}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:'11px',fontWeight:600,color:done?'rgba(74,222,128,.9)':active?'#F6C90E':'rgba(255,255,255,.5)',transition:'color 0.4s',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{step.label}</div>
+                      {(active||done)&&<div style={{fontSize:'9px',color:'rgba(255,255,255,.3)',marginTop:'1px'}}>{step.sub}</div>}
+                    </div>
+                    {active&&<div style={{flexShrink:0,display:'flex',gap:'2px',alignItems:'center',paddingTop:'2px'}}>
+                      {[0,1,2].map(j=><div key={j} style={{width:'3px',height:'3px',borderRadius:'50%',background:'rgba(246,201,14,.7)',animation:`pele-blink 0.7s ${j*0.12}s infinite`}}/>)}
+                    </div>}
+                  </div>
+                )
+              })}
+              <div style={{marginTop:'8px',height:'3px',background:'rgba(255,255,255,.06)',borderRadius:'2px',overflow:'hidden'}}>
+                <div style={{height:'100%',background:'linear-gradient(90deg,#F6C90E,#ffdd55)',borderRadius:'2px',width:`${Math.min(100,autofillStep*(100/7))}%`,transition:'width 1.2s cubic-bezier(.4,0,.2,1)',boxShadow:'0 0 8px rgba(246,201,14,.5)'}}/>
+              </div>
+            </div>
+          </div>
+        )}
         {loadingMsg&&(
           <div className="row-ai">
             <div className="pm">🏆</div>
@@ -1757,23 +2175,21 @@ function BracketPage(){
 
     setGenerating(true); setErr(''); setGenStep(0)
 
-    // Animated steps during generation
-    const steps=['Analizando historial de equipos...','Calculando probabilidades con IA...','Simulando cruces eliminatorios...','Definiendo marcadores probables...','Ajustando el path al campeón...']
-    let stepIdx=0
-    const stepInterval=setInterval(()=>{
-      stepIdx=Math.min(stepIdx+1, steps.length-1)
-      setGenStep(stepIdx)
-    },2200)
+    // Animated steps during generation (7 steps, spread over ~18s)
+    const stepDelays=[0,1800,3600,5600,7800,10200,13000]
+    const stepTimers=stepDelays.map((d,i)=>setTimeout(()=>setGenStep(i),d))
 
     try{
       const data=await api('/api/bracket/suggest','POST',{champion,avatarId:activeAvatar.id})
-      clearInterval(stepInterval)
+      stepTimers.forEach(t=>clearTimeout(t))
+      setGenStep(6)
+      await new Promise(r=>setTimeout(r,800))
       setBracket(data.bracket)
       setChampion(data.bracket.champion||champion)
       setMsg('¡Pronóstico general generado por Pelé IA! Revísalo, edita lo que quieras y guárdalo cuando estés listo.')
       setTab('view')
     }catch(e){
-      clearInterval(stepInterval)
+      stepTimers.forEach(t=>clearTimeout(t))
       setErr(e.message)
     }
     setGenerating(false)
@@ -1899,22 +2315,22 @@ function BracketPage(){
             {locked?(hasBeenEdited?'✏️ Editado · +10 pts':'🔒 Confirmado · +100 pts'):'Confirma para optar por +100 pts'}
           </div>
         </div>
-        <div style={{display:'flex',gap:'5px',flexWrap:'wrap',alignItems:'center',flexShrink:0}}>
+        <div style={{display:'flex',gap:'6px',flexWrap:'wrap',alignItems:'center',flexShrink:0}}>
           {/* Ver tab */}
           <button onClick={()=>setTab('view')}
-            style={{padding:'5px 10px',fontWeight:700,fontSize:'11px',border:'1px solid rgba(255,255,255,.15)',cursor:'pointer',borderRadius:'6px',transition:'all .2s',
+            style={{padding:'7px 14px',fontWeight:700,fontSize:'12px',border:'1px solid rgba(255,255,255,.15)',cursor:'pointer',borderRadius:'8px',transition:'all .2s',
               background:tab==='view'?'var(--gold)':'rgba(255,255,255,.06)',
               color:tab==='view'?'#0d1117':'rgba(255,255,255,.7)'}}>
-            🏆 Ver
+            🏆 Ver bracket
           </button>
-          {/* Big green Pelé IA button */}
+          {/* BIG Pelé IA generate button */}
           <button onClick={()=>setTab('setup')}
-            style={{padding:'5px 10px',fontWeight:700,fontSize:'11px',border:'none',cursor:'pointer',
-              borderRadius:'8px',display:'flex',alignItems:'center',gap:'5px',transition:'all .2s',
+            style={{padding:'9px 18px',fontWeight:800,fontSize:'13px',border:'none',cursor:'pointer',
+              borderRadius:'10px',display:'flex',alignItems:'center',gap:'8px',transition:'all .2s',
               background:tab==='setup'?'#15803d':'#16a34a',
-              color:'#fff',boxShadow:'0 0 12px rgba(22,163,74,.35)'}}>
-            <img src='/pele.jpg' style={{width:'18px',height:'18px',borderRadius:'50%',objectFit:'cover',objectPosition:'top',flexShrink:0,border:'1.5px solid rgba(255,255,255,.4)'}}/>
-            <span style={{whiteSpace:'nowrap'}}>Pelé IA</span>
+              color:'#fff',boxShadow:'0 4px 16px rgba(22,163,74,.4)',letterSpacing:'.2px'}}>
+            <img src='/pele.jpg' style={{width:'24px',height:'24px',borderRadius:'50%',objectFit:'cover',objectPosition:'top',flexShrink:0,border:'2px solid rgba(255,255,255,.5)'}}/>
+            <span style={{whiteSpace:'nowrap'}}>Generar Pronóstico con Pelé IA</span>
           </button>
           <button style={{background:'rgba(255,255,255,.06)',color:'rgba(255,255,255,.7)',border:'1px solid rgba(255,255,255,.1)',borderRadius:'6px',padding:'5px 8px',fontSize:'11px',cursor:'pointer'}} onClick={exportPNG}>📸</button>
           {!locked?(
@@ -1947,30 +2363,59 @@ function BracketPage(){
                   </select>
                   <p style={{fontSize:'11px',color:'rgba(255,255,255,.25)',marginTop:'5px'}}>Solo se aceptan los 9 equipos con posibilidades reales según la IA</p>
                 </div>
-                <button style={{width:'100%',background:champion?'var(--gold)':'rgba(255,255,255,.1)',color:champion?'#0d1117':'rgba(255,255,255,.3)',border:'none',borderRadius:'8px',padding:'.8rem',fontSize:'14px',fontWeight:700,cursor:champion?'pointer':'not-allowed',transition:'all .2s'}} onClick={generateWithAI} disabled={!champion}>
-                  <img src='/pele.jpg' style={{width:'20px',height:'20px',borderRadius:'50%',objectFit:'cover',objectPosition:'top',marginRight:'6px'}}/> Generar con Pelé IA
+                <button style={{width:'100%',background:champion?'#16a34a':'rgba(255,255,255,.1)',color:champion?'#fff':'rgba(255,255,255,.3)',border:'none',borderRadius:'12px',padding:'1rem',fontSize:'15px',fontWeight:800,cursor:champion?'pointer':'not-allowed',transition:'all .2s',display:'flex',alignItems:'center',justifyContent:'center',gap:'10px',boxShadow:champion?'0 4px 20px rgba(22,163,74,.4)':'none'}} onClick={generateWithAI} disabled={!champion}>
+                  <img src='/pele.jpg' style={{width:'28px',height:'28px',borderRadius:'50%',objectFit:'cover',objectPosition:'top',flexShrink:0,border:'2px solid rgba(255,255,255,.5)'}}/>
+                  <span>Generar Pronóstico con Pelé IA ✨</span>
                 </button>
               </>
             ):(
-              <div style={{textAlign:'center',padding:'2rem 1rem'}}>
-                {/* Animated generating state */}
-                <div style={{position:'relative',width:'80px',height:'80px',margin:'0 auto 1.25rem'}}>
-                  <div style={{position:'absolute',inset:0,borderRadius:'50%',border:'3px solid rgba(246,201,14,.15)'}}/>
-                  <div style={{position:'absolute',inset:0,borderRadius:'50%',border:'3px solid transparent',borderTopColor:'var(--gold)',animation:'spin 1s linear infinite'}}/>
-                  <div style={{position:'absolute',inset:'8px',borderRadius:'50%',border:'2px solid rgba(246,201,14,.1)'}}/>
-                  <div style={{position:'absolute',inset:'8px',borderRadius:'50%',border:'2px solid transparent',borderTopColor:'rgba(246,201,14,.5)',animation:'spin .6s linear infinite reverse'}}/>
-                  <div style={{position:'absolute',inset:'6px',borderRadius:'50%',overflow:'hidden'}}><img src='/pele.jpg' style={{width:'100%',height:'100%',objectFit:'cover',objectPosition:'top'}}/></div>
+              <div style={{padding:'.5rem 0'}}>
+                <div style={{background:'linear-gradient(135deg,#0d1117,#111827)',border:'1px solid rgba(246,201,14,.25)',borderRadius:'var(--r)',overflow:'hidden',position:'relative',padding:'1.1rem .9rem'}}>
+                  <div style={{position:'absolute',top:0,left:0,right:0,height:'2px',background:'linear-gradient(90deg,transparent,#F6C90E,transparent)',animation:'pele-scan 1.8s ease-in-out infinite'}}/>
+                  <div style={{display:'flex',alignItems:'center',gap:'9px',marginBottom:'.9rem'}}>
+                    <div style={{width:'32px',height:'32px',borderRadius:'50%',overflow:'hidden',border:'1.5px solid rgba(246,201,14,.5)',flexShrink:0,boxShadow:'0 0 10px rgba(246,201,14,.3)',animation:'pele-pulse 1.5s ease-in-out infinite'}}>
+                      <img src='/pele.jpg' style={{width:'100%',height:'100%',objectFit:'cover',objectPosition:'top'}}/>
+                    </div>
+                    <div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:'.9rem',letterSpacing:'2px',color:'#F6C90E',lineHeight:1}}>PELÉ IA SIMULANDO EL TORNEO</div>
+                      <div style={{fontSize:'9px',color:'rgba(255,255,255,.35)',letterSpacing:'1px',textTransform:'uppercase',marginTop:'2px'}}>Campeón elegido: {es(champion)}</div>
+                    </div>
+                    <div style={{marginLeft:'auto',display:'flex',gap:'3px'}}>
+                      {[0,1,2].map(i=><div key={i} style={{width:'4px',height:'4px',borderRadius:'50%',background:'#F6C90E',animation:`pele-blink 1s ${i*0.2}s infinite`}}/>)}
+                    </div>
+                  </div>
+                  {[
+                    {icon:'📡',label:'Escaneando fixture completo · 104 partidos',sub:'Fase de grupos · Octavos · Cuartos · Semis · Final'},
+                    {icon:'🧬',label:'Analizando ADN de 48 selecciones',sub:'Rankings FIFA · forma reciente · jugadores clave'},
+                    {icon:'⚡',label:'Calculando probabilidades de cruce',sub:'Modelo Elo + xG + factores de sede y clima'},
+                    {icon:'🔀',label:'Simulando cruces eliminatorios',sub:'16 → 8 → 4 → 2 · propagando al campeón elegido'},
+                    {icon:'🏆',label:`Construyendo el camino de ${es(champion)} al título`,sub:'Validando rivales plausibles en cada ronda'},
+                    {icon:'🎯',label:'Definiendo marcadores más probables',sub:'Goles esperados · historial de enfrentamientos'},
+                    {icon:'✅',label:'¡Bracket completo!',sub:'Listo para revisar y editar libremente'},
+                  ].map((step,i)=>{
+                    const done=genStep>i,active=genStep===i,pending=genStep<i
+                    return(
+                      <div key={i} style={{display:'flex',alignItems:'flex-start',gap:'8px',padding:'4px 0',opacity:pending?0.25:1,transition:'opacity 0.5s,transform 0.4s',transform:active?'translateX(3px)':'translateX(0)'}}>
+                        <div style={{width:'24px',height:'24px',borderRadius:'5px',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'0.75rem',
+                          background:done?'rgba(22,163,74,.15)':active?'rgba(246,201,14,.12)':'rgba(255,255,255,.04)',
+                          border:`1px solid ${done?'rgba(22,163,74,.4)':active?'rgba(246,201,14,.5)':'rgba(255,255,255,.06)'}`,
+                          transition:'all 0.4s',boxShadow:active?'0 0 8px rgba(246,201,14,.25)':'none'
+                        }}>{done?'✓':step.icon}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:'11px',fontWeight:600,color:done?'rgba(74,222,128,.9)':active?'#F6C90E':'rgba(255,255,255,.5)',transition:'color 0.4s',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{step.label}</div>
+                          {(active||done)&&<div style={{fontSize:'9px',color:'rgba(255,255,255,.3)',marginTop:'1px'}}>{step.sub}</div>}
+                        </div>
+                        {active&&<div style={{flexShrink:0,display:'flex',gap:'2px',alignItems:'center',paddingTop:'2px'}}>
+                          {[0,1,2].map(j=><div key={j} style={{width:'3px',height:'3px',borderRadius:'50%',background:'rgba(246,201,14,.7)',animation:`pele-blink 0.7s ${j*0.12}s infinite`}}/>)}
+                        </div>}
+                      </div>
+                    )
+                  })}
+                  <div style={{marginTop:'8px',height:'3px',background:'rgba(255,255,255,.06)',borderRadius:'2px',overflow:'hidden'}}>
+                    <div style={{height:'100%',background:'linear-gradient(90deg,#F6C90E,#ffdd55)',borderRadius:'2px',width:`${Math.min(100,genStep*(100/6))}%`,transition:'width 1.6s cubic-bezier(.4,0,.2,1)',boxShadow:'0 0 8px rgba(246,201,14,.5)'}}/>
+                  </div>
+
                 </div>
-                <div style={{fontFamily:'Bebas Neue',fontSize:'1.3rem',color:'var(--gold)',letterSpacing:2,marginBottom:'.5rem'}}>ANALIZANDO CON PELÉ IA</div>
-                <div style={{fontSize:'13px',color:'rgba(255,255,255,.5)',marginBottom:'1rem',minHeight:'20px',transition:'all .3s'}}>
-                  {['Analizando historial de equipos...','Calculando probabilidades con IA...','Simulando cruces eliminatorios...','Definiendo marcadores probables...','Ajustando el path al campeón...'][genStep]}
-                </div>
-                <div style={{display:'flex',justifyContent:'center',gap:'4px'}}>
-                  {[0,1,2,3,4].map(i=>(
-                    <div key={i} style={{width:'6px',height:'6px',borderRadius:'50%',background:i===genStep?'var(--gold)':'rgba(255,255,255,.15)',transition:'all .3s'}}/>
-                  ))}
-                </div>
-                <p style={{fontSize:'11px',color:'rgba(255,255,255,.2)',marginTop:'1rem'}}>Esto puede tardar 15-20 segundos...</p>
               </div>
             )}
           </div>
@@ -2242,7 +2687,7 @@ function BoardPage(){
                     {pred&&(
                       <div className="match-pred">
                         <span style={{color:'var(--ink3)'}}>Pronóstico: {pred.score_home}–{pred.score_away}</span>
-                        {hasResult&&<span className={`pts-badge ${pts>=PHASE_PTS[ph]?.exact?'pts-exact':pts>0?'pts-win':'pts-miss'}`}>{pts>0?`+${pts}pts`:'Sin pts'}</span>}
+                        {hasResult&&<span className={('pts-badge '+(pts>=PHASE_PTS[ph]?.exact?'pts-exact':pts>0?'pts-win':'pts-miss'))}>{pts>0?`+${pts}pts`:'Sin pts'}</span>}
                         <span className={`chip ${locked?'chip-r':'chip-g'}`} style={{fontSize:'8px'}}>{locked?'🔒 Bloqueado':'✏️ Editable'}</span>
                       </div>
                     )}
@@ -2401,7 +2846,7 @@ function ResultsPage(){
           const pts=(r.points_earned||0)+(r.extra_pts||0)
           const exact=r.points_earned>=PHASE_PTS[r.phase]?.exact
           return(
-            <div key={r.id} className={`match-row ${pts>0?'match-row-done':''}`} style={{marginBottom:'.4rem'}}>
+            <div key={r.id} className={'match-row'+(pts>0?' match-row-done':'')} style={{marginBottom:'.4rem'}}>
               <div className="match-teams">
                 <span style={{flex:1,textAlign:'right'}}>{f(r.team1)} {es(r.team1)}</span>
                 <span className="match-score">{r.real_home}–{r.real_away}</span>
@@ -2432,6 +2877,7 @@ function AdminPage(){
 
   const navItems=[
     {k:'users',icon:'👥',l:'Participantes'},
+    {k:'trivia',icon:'🧠',l:'Extra Points'},
     {k:'results',icon:'📊',l:'Resultados'},
     {k:'locks',icon:'🔒',l:'Fases'},
     {k:'teams',icon:'⚽',l:'Equipos'},
@@ -2478,9 +2924,198 @@ function AdminPage(){
           {tab==='locks'&&<AdminLocks/>}
           {tab==='teams'&&<AdminTeams/>}
           {tab==='results'&&<AdminResults/>}
+          {tab==='trivia'&&<AdminTrivia/>}
           {tab==='config'&&<AdminConfig/>}
         </div>
       </div>
+    </div>
+  )
+}
+
+function AdminTrivia(){
+  const {activeAvatar}=useApp()
+  const [questions,setQuestions]=React.useState([])
+  const [loading,setLoading]=React.useState(true)
+  const [generating,setGenerating]=React.useState(false)
+  const [saving,setSaving]=React.useState(false)
+  const [msg,setMsg]=React.useState(null)
+  const [showForm,setShowForm]=React.useState(false)
+  const [topic,setTopic]=React.useState('')
+  const [difficulty,setDifficulty]=React.useState('easy')
+  const [draft,setDraft]=React.useState(null) // AI-generated draft
+  const [editDraft,setEditDraft]=React.useState(null) // editable version
+
+  const DIFF_LABELS={easy:'🟢 Fácil (2 pts)',medium:'🟡 Refácil (3 pts)',hard:'🔴 Muy fácil (4 pts)'}
+  const DIFF_COLORS={easy:'#16a34a',medium:'#d97706',hard:'#dc2626'}
+
+  React.useEffect(()=>{ loadQuestions() },[])
+
+  async function loadQuestions(){
+    setLoading(true)
+    try{ const d=await api('/api/admin/trivia'); setQuestions(d||[]) }
+    catch(e){ setMsg({type:'error',text:e.message}) }
+    setLoading(false)
+  }
+
+  async function generateWithAI(){
+    if(!topic.trim()){ setMsg({type:'error',text:'Escribe un tema primero'}); return }
+    setGenerating(true); setMsg(null); setDraft(null)
+    try{
+      const d=await api('/api/admin/trivia/generate','POST',{topic,difficulty})
+      setDraft(d)
+      setEditDraft({...d, options:[...d.options]})
+    }catch(e){ setMsg({type:'error',text:e.message}) }
+    setGenerating(false)
+  }
+
+  async function saveQuestion(){
+    if(!editDraft) return
+    setSaving(true); setMsg(null)
+    try{
+      const q=await api('/api/admin/trivia','POST',{
+        question:editDraft.question,
+        options:editDraft.options,
+        correct_answer:editDraft.correct_answer,
+        difficulty
+      })
+      setQuestions(p=>[q,...p])
+      setDraft(null); setEditDraft(null); setTopic(''); setShowForm(false)
+      setMsg({type:'success',text:'✅ Pregunta creada y publicada para todos los jugadores!'})
+    }catch(e){ setMsg({type:'error',text:e.message}) }
+    setSaving(false)
+  }
+
+  async function toggleQuestion(id){
+    try{
+      const d=await api('/api/admin/trivia/'+id+'/toggle','PUT',{})
+      setQuestions(p=>p.map(q=>q.id===id?{...q,is_active:d.is_active}:q))
+    }catch(e){ setMsg({type:'error',text:e.message}) }
+  }
+
+  async function deleteQuestion(id){
+    if(!window.confirm('¿Eliminar esta pregunta? Los jugadores que ya respondieron conservan sus puntos.')) return
+    try{
+      await api('/api/admin/trivia/'+id,'DELETE',null)
+      setQuestions(p=>p.filter(q=>q.id!==id))
+    }catch(e){ setMsg({type:'error',text:e.message}) }
+  }
+
+  return(
+    <div>
+      {/* Header card */}
+      <div className="card" style={{marginBottom:'1rem',background:'linear-gradient(135deg,#0d1117,#111827)',border:'1.5px solid rgba(246,201,14,.3)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'1rem'}}>
+          <div style={{width:44,height:44,borderRadius:'50%',overflow:'hidden',border:'2px solid var(--gold)',flexShrink:0}}>
+            <img src="/pele.jpg" style={{width:'100%',height:'100%',objectFit:'cover',objectPosition:'top'}} alt="Pele"/>
+          </div>
+          <div>
+            <div style={{fontFamily:'Bebas Neue',fontSize:'1.1rem',color:'var(--gold)',letterSpacing:1}}>EXTRA POINTS CON PELÉ IA</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,.5)',marginTop:2}}>Crea preguntas de trivia de fútbol. Los jugadores responden desde su tablero y suman puntos extra.</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'1rem'}}>
+          <div style={{background:'rgba(22,163,74,.12)',border:'1px solid rgba(22,163,74,.3)',borderRadius:8,padding:'6px 12px',fontSize:11,color:'#4ade80'}}>🟢 Fácil — 2 pts</div>
+          <div style={{background:'rgba(217,119,6,.12)',border:'1px solid rgba(217,119,6,.3)',borderRadius:8,padding:'6px 12px',fontSize:11,color:'#fbbf24'}}>🟡 Refácil — 3 pts</div>
+          <div style={{background:'rgba(220,38,38,.12)',border:'1px solid rgba(220,38,38,.3)',borderRadius:8,padding:'6px 12px',fontSize:11,color:'#f87171'}}>🔴 Muy fácil — 4 pts</div>
+        </div>
+        {!showForm?(
+          <button className="btn btn-gold btn-full" onClick={()=>setShowForm(true)}>🤖 Crear nueva pregunta con Pelé IA</button>
+        ):(
+          <div style={{background:'rgba(255,255,255,.04)',border:'1px solid rgba(255,255,255,.08)',borderRadius:10,padding:'1rem'}}>
+            <div style={{fontWeight:700,color:'#fff',marginBottom:'0.75rem',fontSize:13}}>🤖 Pelé IA genera la pregunta</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr auto',gap:8,marginBottom:8}}>
+              <input className="inp" placeholder="Tema: ej. Goleadores historicos del Mundial, Reglas del futbol..." value={topic} onChange={e=>setTopic(e.target.value)} onKeyDown={e=>e.key==='Enter'&&generateWithAI()}/>
+              <select className="inp" value={difficulty} onChange={e=>setDifficulty(e.target.value)} style={{width:130}}>
+                <option value="easy">Fácil (2 pts)</option>
+                <option value="medium">Refácil (3 pts)</option>
+                <option value="hard">Muy fácil (4 pts)</option>
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8,marginBottom:draft?'1rem':0}}>
+              <button className="btn btn-gold" onClick={generateWithAI} disabled={generating} style={{flex:1}}>
+                {generating?'⏳ Generando...':(draft?'🔄 Regenerar':'✨ Generar con Pelé IA')}
+              </button>
+              <button className="btn btn-outline" onClick={()=>{setShowForm(false);setDraft(null);setEditDraft(null)}}>Cancelar</button>
+            </div>
+
+            {generating&&(
+              <div style={{textAlign:'center',padding:'1rem 0',color:'rgba(255,255,255,.5)',fontSize:12}}>
+                <div style={{fontSize:'1.5rem',marginBottom:6}}>🤔</div>
+                Pelé IA está pensando la pregunta perfecta...
+              </div>
+            )}
+
+            {editDraft&&(
+              <div style={{marginTop:'1rem'}}>
+                <div style={{height:1,background:'rgba(255,255,255,.08)',margin:'0 0 1rem'}}/>
+                <div style={{fontSize:11,fontWeight:700,color:'rgba(255,255,255,.4)',textTransform:'uppercase',letterSpacing:1,marginBottom:8}}>Edita si quieres antes de guardar</div>
+                <textarea className="inp" rows={3} value={editDraft.question} onChange={e=>setEditDraft(p=>({...p,question:e.target.value}))} style={{marginBottom:8,resize:'vertical'}}/>
+                {editDraft.options.map((opt,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                    <button onClick={()=>setEditDraft(p=>({...p,correct_answer:i}))}
+                      style={{width:22,height:22,borderRadius:'50%',border:'none',cursor:'pointer',flexShrink:0,
+                        background:editDraft.correct_answer===i?'var(--gold)':'rgba(255,255,255,.15)',transition:'all .15s'}} title="Marcar como correcta"/>
+                    <input className="inp" value={opt} onChange={e=>{const o=[...editDraft.options];o[i]=e.target.value;setEditDraft(p=>({...p,options:o}))}}
+                      style={{flex:1,fontSize:12,borderColor:editDraft.correct_answer===i?'rgba(246,201,14,.5)':'rgba(255,255,255,.12)'}}/>
+                    <span style={{fontSize:10,color:'rgba(255,255,255,.3)',flexShrink:0}}>{editDraft.correct_answer===i?'✅ Correcta':''}</span>
+                  </div>
+                ))}
+                {editDraft.explanation&&(
+                  <div style={{background:'rgba(246,201,14,.06)',border:'1px solid rgba(246,201,14,.15)',borderRadius:8,padding:'8px 12px',fontSize:11,color:'rgba(255,255,255,.5)',marginBottom:12}}>
+                    💡 {editDraft.explanation}
+                  </div>
+                )}
+                <button className="btn btn-gold btn-full" onClick={saveQuestion} disabled={saving}>
+                  {saving?'Guardando...':'💾 Publicar pregunta — aparece en el tablero de todos'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {msg&&<Alert type={msg.type} style={{marginBottom:'1rem'}}>{msg.text}</Alert>}
+
+      {/* Questions list */}
+      <div style={{fontFamily:'Bebas Neue',fontSize:'1rem',letterSpacing:1,color:'var(--ink)',marginBottom:'0.5rem'}}>{questions.length} PREGUNTA{questions.length!==1?'S':''} CREADA{questions.length!==1?'S':''}</div>
+      {loading?<Spinner/>:(
+        questions.length===0?(
+          <div className="card" style={{textAlign:'center',padding:'2rem',color:'var(--ink3)'}}>
+            <div style={{fontSize:'2rem',marginBottom:8}}>🧠</div>
+            <div style={{fontWeight:700,marginBottom:4}}>Aún no hay preguntas</div>
+            <div style={{fontSize:12}}>Crea la primera con Pelé IA y aparecerá en el tablero de tus jugadores automáticamente.</div>
+          </div>
+        ):(
+          questions.map(q=>(
+            <div key={q.id} className="card" style={{marginBottom:'0.75rem',borderLeft:`3px solid ${DIFF_COLORS[q.difficulty]||'var(--gold)'}`,opacity:q.is_active?1:0.5}}>
+              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:8,marginBottom:6}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:700,color:'var(--ink)',marginBottom:4}}>{q.question}</div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    <span style={{fontSize:10,background:DIFF_COLORS[q.difficulty]+'20',color:DIFF_COLORS[q.difficulty],border:'1px solid '+DIFF_COLORS[q.difficulty]+'40',borderRadius:20,padding:'2px 8px',fontWeight:700}}>{DIFF_LABELS[q.difficulty]}</span>
+                    <span style={{fontSize:10,color:'var(--ink3)'}}>{ℹ️} {q.answer_count||0} resp · {q.correct_count||0} correctas</span>
+                    {!q.is_active&&<span style={{fontSize:10,color:'var(--ink3)',background:'var(--cream2)',border:'1px solid var(--border)',borderRadius:20,padding:'2px 8px'}}>💤 Oculta</span>}
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:5,flexShrink:0}}>
+                  <button className="btn btn-outline btn-sm" onClick={()=>toggleQuestion(q.id)}>{q.is_active?'💤 Ocultar':'👁️ Mostrar'}</button>
+                  <button className="btn btn-sm" style={{background:'rgba(220,38,38,.1)',color:'#dc2626',border:'1px solid rgba(220,38,38,.2)'}} onClick={()=>deleteQuestion(q.id)}>🗑️</button>
+                </div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
+                {(q.options||[]).map((opt,i)=>(
+                  <div key={i} style={{fontSize:11,padding:'4px 8px',borderRadius:6,
+                    background:i===q.correct_answer?'rgba(22,163,74,.12)':'rgba(255,255,255,.02)',
+                    border:'1px solid '+(i===q.correct_answer?'rgba(22,163,74,.3)':'rgba(0,0,0,.05)'),
+                    color:i===q.correct_answer?'#16a34a':'var(--ink2)',fontWeight:i===q.correct_answer?700:400}}>
+                    {['A','B','C','D'][i]}. {opt} {i===q.correct_answer?'✅':''}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
+        )
+      )}
     </div>
   )
 }
@@ -3220,18 +3855,9 @@ function AppRoot(){
   const ctx={view,setView,user,setUser,avatars,setAvatars,activeAvatar,setActiveAvatar,
     matches,setMatches,settings,setSettings,logout,tournament,setTournament}
 
-  // Animated chat bounce keyframes
-  const bounceStyle=`.bounce-dot{width:6px;height:6px;border-radius:50%;background:var(--ink3);}
-@keyframes bounce{0%,100%{transform:translateY(0);}50%{transform:translateY(-4px);}}
-@keyframes spin{to{transform:rotate(360deg)}}`
 
   return(
     <AppCtx.Provider value={ctx}>
-      <style>{bounceStyle+`
-        [class*="bounce"]{animation:bounce .9s infinite;}
-        .bounce-1{animation-delay:.15s!important;}
-        .bounce-2{animation-delay:.3s!important;}
-      `}</style>
 
       {view==='landing'&&<LandingPage/>}
 

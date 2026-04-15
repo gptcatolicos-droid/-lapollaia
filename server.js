@@ -68,7 +68,26 @@ async function sendMail(to, subject, html){
 
 
 
-app.use(express.json({ limit: '10mb' }))
+app.use(express.json({ limit: '2mb' }))
+
+// ─── CORS ─────────────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  process.env.APP_URL || 'http://localhost:3000',
+  'https://lapollaia.com',
+  'https://www.lapollaia.com',
+  'https://lapollaia.onrender.com'
+]
+app.use((req,res,next)=>{
+  const origin = req.headers.origin
+  if(origin && ALLOWED_ORIGINS.some(o=>origin.startsWith(o))){
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Credentials','true')
+    res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers','Content-Type,Authorization,x-super-key')
+  }
+  if(req.method==='OPTIONS'){ res.sendStatus(204); return }
+  next()
+})
 
 // ─── SECURITY HEADERS ─────────────────────────────────────────────────────────
 app.use((req,res,next)=>{
@@ -77,8 +96,30 @@ app.use((req,res,next)=>{
   res.setHeader('X-XSS-Protection','1; mode=block')
   res.setHeader('Referrer-Policy','strict-origin-when-cross-origin')
   res.setHeader('Permissions-Policy','camera=(),microphone=(),geolocation=()')
+  res.setHeader('Strict-Transport-Security','max-age=31536000; includeSubDomains')
   next()
 })
+
+// ─── RATE LIMITING (in-memory, no extra packages needed) ──────────────────────
+const _rl = {}
+function rateLimit(max, windowMs=60000){
+  return (req,res,next)=>{
+    const key = (req.ip||'unknown') + ':' + req.path + ':' + Math.floor(Date.now()/windowMs)
+    _rl[key] = (_rl[key]||0) + 1
+    if(_rl[key] > max) return res.status(429).json({error:'Demasiadas solicitudes. Intenta en un momento.'})
+    next()
+  }
+}
+// Throttle sensitive auth endpoints
+const authLimit = rateLimit(20, 60000)    // 20 req/min per IP on auth
+const apiLimit  = rateLimit(200, 60000)   // 200 req/min per IP on API
+app.use('/api/auth', authLimit)
+app.use('/api/', apiLimit)
+// Clean stale rate limit keys every 5 minutes
+setInterval(()=>{
+  const cutoff = Math.floor(Date.now()/60000) - 2
+  Object.keys(_rl).forEach(k=>{ if(parseInt(k.split(':').pop()) < cutoff) delete _rl[k] })
+}, 5*60*1000)
 
 // ─── PAYPAL HELPERS ───────────────────────────────────────────────────────────
 async function paypalToken(){
@@ -240,6 +281,43 @@ async function initDb() {
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+
+      -- Trivia questions created by admin (Pelé IA assisted)
+      CREATE TABLE IF NOT EXISTS trivia_questions(
+        id TEXT PRIMARY KEY,
+        tournament_id TEXT NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,
+        options JSONB NOT NULL DEFAULT '[]',
+        correct_answer INTEGER NOT NULL,
+        difficulty TEXT NOT NULL DEFAULT 'easy',
+        points INTEGER NOT NULL DEFAULT 2,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Trivia answers by users
+      CREATE TABLE IF NOT EXISTS trivia_answers(
+        id TEXT PRIMARY KEY,
+        trivia_id TEXT NOT NULL REFERENCES trivia_questions(id) ON DELETE CASCADE,
+        avatar_id TEXT NOT NULL REFERENCES avatars(id) ON DELETE CASCADE,
+        answer_idx INTEGER NOT NULL,
+        is_correct BOOLEAN NOT NULL DEFAULT FALSE,
+        points_earned INTEGER NOT NULL DEFAULT 0,
+        answered_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(trivia_id, avatar_id)
+      );
+
+      -- Registration bonus tracking
+      CREATE TABLE IF NOT EXISTS registration_bonus(
+        id TEXT PRIMARY KEY,
+        avatar_id TEXT UNIQUE REFERENCES avatars(id) ON DELETE CASCADE,
+        points INTEGER NOT NULL DEFAULT 20,
+        awarded_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Courtesy tournaments (created by superadmin, no payment required)
+      ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS is_courtesy BOOLEAN DEFAULT FALSE;
     `)
 
     const {rows:[{count}]} = await c.query('SELECT COUNT(*) FROM matches')
@@ -386,6 +464,7 @@ function getWinner(h,a){ return +h>+a?'home':+h<+a?'away':'draw' }
 // Marketing home
 app.get('/', (req,res) => res.sendFile(path.join(__dirname,'public','index.html')))
 app.get('/pele', (req,res) => res.sendFile(path.join(__dirname,'public','pele.html')))
+app.get('/bracket', (req,res) => res.sendFile(path.join(__dirname,'public','bracket-demo.html')))
 
 // Game SPA — serve app.html for all /t/:slug routes
 app.get('/t/:slug', (req,res) => res.sendFile(path.join(__dirname,'public','app.html')))
@@ -723,6 +802,10 @@ app.post('/api/auth/register', async(req,res)=>{
       'INSERT INTO avatars(id,user_id,tournament_id,nickname,is_paid,is_active) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
       [avId,user.id,tournamentId,finalNick,true,false])
 
+    // Award 20pt registration bonus
+    const bonusId='bonus-'+crypto.randomBytes(8).toString('hex')
+    await pool.query('INSERT INTO registration_bonus(id,avatar_id,points) VALUES($1,$2,20) ON CONFLICT DO NOTHING',[bonusId,avId])
+
     res.json({token,user:{id:user.id,name:user.name,email:user.email,isAdmin:false,termsAccepted:false},avatars:[autoAv]})
   }catch(e){ console.error('register:',e.message); res.status(500).json({error:'Error del servidor'}) }
 })
@@ -873,15 +956,18 @@ app.get('/api/ranking', auth, async(req,res)=>{
       SELECT av.id,av.nickname,av.photo_url,u.name as user_name,
         COALESCE(SUM(p.points_earned),0)+COALESCE(SUM(ep.points_earned),0)+
         COALESCE(sp.champion_pts,0)+COALESCE(sp.surprise_pts,0)+
-        COALESCE(sp.balon_pts,0)+COALESCE(sp.guante_pts,0)+COALESCE(sp.bota_pts,0) as total_points,
+        COALESCE(sp.balon_pts,0)+COALESCE(sp.guante_pts,0)+COALESCE(sp.bota_pts,0)+
+        COALESCE(rb.points,0)+COALESCE(SUM(ta.points_earned),0) as total_points,
         COUNT(DISTINCT p.match_id) FILTER(WHERE p.score_home IS NOT NULL) as matches_predicted
       FROM avatars av
       JOIN users u ON u.id=av.user_id
       LEFT JOIN predictions p ON p.avatar_id=av.id
       LEFT JOIN extra_predictions ep ON ep.avatar_id=av.id
       LEFT JOIN special_predictions sp ON sp.avatar_id=av.id
+      LEFT JOIN registration_bonus rb ON rb.avatar_id=av.id
+      LEFT JOIN trivia_answers ta ON ta.avatar_id=av.id AND ta.is_correct=TRUE
       WHERE av.tournament_id=$1 AND av.is_active=TRUE
-      GROUP BY av.id,av.nickname,av.photo_url,u.name,sp.champion_pts,sp.surprise_pts,sp.balon_pts,sp.guante_pts,sp.bota_pts
+      GROUP BY av.id,av.nickname,av.photo_url,u.name,sp.champion_pts,sp.surprise_pts,sp.balon_pts,sp.guante_pts,sp.bota_pts,rb.points
       ORDER BY total_points DESC,matches_predicted ASC`,[tid])
     res.json(rows.map((r,i)=>({...r,rank:i+1})))
   }catch(e){ res.status(500).json({error:'Error'}) }
@@ -959,8 +1045,9 @@ h1{font-family:'Bebas Neue',sans-serif;font-size:2.5rem;letter-spacing:2px;color
     <h3>Próximos pasos</h3>
     <div class="step-item"><div class="step-n">1</div><div>Entra con tu correo y contraseña para configurar tu polla</div></div>
     <div class="step-item"><div class="step-n">2</div><div>Sube tu logo y elige tus colores en Admin → Configuración</div></div>
-    <div class="step-item"><div class="step-n">3</div><div>Copia tu link y mándalo por WhatsApp al grupo</div></div>
-    <div class="step-item"><div class="step-n">4</div><div>Cuando un jugador se registre, confirma su pago en el panel de admin</div></div>
+    <div class="step-item"><div class="step-n">3</div><div>Copia tu link y mándalo por WhatsApp al grupo — cada jugador recibe <strong>🎁 20 pts de bienvenida</strong> al registrarse</div></div>
+    <div class="step-item"><div class="step-n">4</div><div>Cuando un jugador se registre, confirma su participación en Admin → Participantes</div></div>
+    <div class="step-item"><div class="step-n">5</div><div>Crea preguntas de trivia en Admin → Extra Points con ayuda de Pelé IA — aparecen automáticamente en el tablero de todos 🧠</div></div>
   </div>
   <a href="${url}" class="btn">🏆 Ir a configurar mi Polla →</a>
   <p class="note">📧 También te enviamos un correo de confirmación con todos los detalles</p>
@@ -1009,7 +1096,7 @@ app.post('/api/pele', auth, async(req,res)=>{
 PARTIDO ACTUAL: ${matchContext.team1||'?'} vs ${matchContext.team2||'?'} · Fase: ${matchContext.phase||'grupos'} · Sede: ${matchContext.venue||'?'}`
       :''
     const msg=await anthropic.messages.create({
-      model:'claude-sonnet-4-20250514', max_tokens:400,
+      model:'claude-sonnet-4-6', max_tokens:400,
       system:PELE_SYSTEM+`
 TORNEO: "${t?.name||'La Polla IA'}"
 JUGADOR: ${avatarName||'el usuario'}${contextExtra}`,
@@ -1024,7 +1111,7 @@ app.post('/api/pele/suggest', auth, async(req,res)=>{
   const {team1,team2,rank1,rank2,notes1,notes2,venue,matchDate,group}=req.body
   try{
     const msg=await anthropic.messages.create({
-      model:'claude-sonnet-4-20250514', max_tokens:500,
+      model:'claude-sonnet-4-6', max_tokens:500,
       system:`Eres un analista experto de fútbol internacional. Cuando sugieras un marcador SIEMPRE debes explicar el razonamiento.
 Responde SOLO en JSON válido (sin markdown): {"home":NUMERO,"away":NUMERO,"reason":"2-3 líneas en español explicando POR QUÉ ese marcador: ranking, historial entre equipos, forma reciente, ventaja de sede, jugadores clave"}`,
       messages:[{role:'user',content:`Partido del Grupo ${group}: ${team1} (ranking #${rank1}, ${notes1}) vs ${team2} (ranking #${rank2}, ${notes2}). Sede: ${venue}. Fecha: ${matchDate}. Analiza el partido considerando: ranking FIFA, historial directo, jugadores estrella, sede y contexto del grupo. Sugiere el marcador más probable y explica el razonamiento.`}]
@@ -1057,7 +1144,7 @@ app.post('/api/pele/public', async(req,res)=>{
       {role:'user',content:message}
     ]
     const resp=await anthropic.messages.create({
-      model:'claude-sonnet-4-20250514', max_tokens:600,
+      model:'claude-sonnet-4-6', max_tokens:600,
       system:`Eres Pelé IA, el mayor experto en fútbol del mundo. Hablas en español con pasión y conocimiento profundo.
 
 CONTEXTO TEMPORAL CRÍTICO — MUY IMPORTANTE:
@@ -1104,7 +1191,7 @@ app.post('/api/pele/free', auth, async(req,res)=>{
     ]
 
     const msg=await anthropic.messages.create({
-      model:'claude-sonnet-4-20250514', max_tokens:600,
+      model:'claude-sonnet-4-6', max_tokens:600,
       system:PELE_SYSTEM+`
 JUGADOR: ${avatarName||'el usuario'}
 MODO: Chat libre de fútbol. El usuario puede preguntar CUALQUIER cosa sobre fútbol. Responde con datos precisos y análisis de calidad. Si tienes datos de Football API disponibles en el mensaje, úsalos para enriquecer tu respuesta.`,
@@ -1175,29 +1262,31 @@ app.post('/api/autofill', auth, async(req,res)=>{
 
     if(pending.length===0) return res.json({filled:0, message:'No hay partidos disponibles para llenar'})
 
-    // Call AI for each match (batch, up to 20 to avoid timeout)
-    const toProcess = pending.slice(0, 20)
+    // Process ALL pending matches in parallel batches of 8
+    const BATCH_SIZE = 8
     const results = []
-
-    for(const m of toProcess){
-      const t1stats = TEAM_STATS_SERVER[m.team1]||{rank:50,notes:'Datos no disponibles'}
-      const t2stats = TEAM_STATS_SERVER[m.team2]||{rank:50,notes:'Datos no disponibles'}
-      try{
-        const msg = await anthropic.messages.create({
-          model:'claude-sonnet-4-20250514', max_tokens:150,
-          system:`Eres un analista de fútbol. Responde SOLO JSON válido sin markdown: {"home":N,"away":N}`,
-          messages:[{role:'user',content:`${m.team1}(#${t1stats.rank},${t1stats.notes}) vs ${m.team2}(#${t2stats.rank},${t2stats.notes}). Fase:${m.phase}. Grupo:${m.group_name||''}. Sede:${m.venue||''}. Marcador más probable:`}]
-        })
-        const text = msg.content[0].text.trim().replace(/```json|```/g,'').trim()
-        const parsed = JSON.parse(text)
-        const h = Math.max(0,Math.min(9,parseInt(parsed.home)||0))
-        const a = Math.max(0,Math.min(9,parseInt(parsed.away)||0))
-        results.push({matchId:m.id, home:h, away:a})
-      } catch(e){
-        // Fallback: use ranking logic
-        const r1 = t1stats.rank||50, r2 = t2stats.rank||50
-        results.push({matchId:m.id, home:r1<r2?2:r1>r2?1:1, away:r1<r2?0:r1>r2?2:1})
-      }
+    for(let i=0; i<pending.length; i+=BATCH_SIZE){
+      const batch = pending.slice(i, i+BATCH_SIZE)
+      const batchResults = await Promise.all(batch.map(async m=>{
+        const t1stats = TEAM_STATS_SERVER[m.team1]||{rank:50,notes:'Datos no disponibles'}
+        const t2stats = TEAM_STATS_SERVER[m.team2]||{rank:50,notes:'Datos no disponibles'}
+        try{
+          const msg = await anthropic.messages.create({
+            model:'claude-sonnet-4-6', max_tokens:80,
+            system:`Eres analista de fútbol. Responde SOLO JSON: {"home":N,"away":N}`,
+            messages:[{role:'user',content:`${m.team1}(#${t1stats.rank}) vs ${m.team2}(#${t2stats.rank}). Fase:${m.phase}. Grupo:${m.group_name||''}. Marcador probable:`}]
+          })
+          const text = msg.content[0].text.trim().replace(/```json|```/g,'').trim()
+          const parsed = JSON.parse(text)
+          const h = Math.max(0,Math.min(9,parseInt(parsed.home)||0))
+          const a = Math.max(0,Math.min(9,parseInt(parsed.away)||0))
+          return {matchId:m.id, home:h, away:a}
+        } catch(e){
+          const r1 = t1stats.rank||50, r2 = t2stats.rank||50
+          return {matchId:m.id, home:r1<r2?2:r1>r2?1:1, away:r1<r2?0:r1>r2?2:1}
+        }
+      }))
+      results.push(...batchResults)
     }
 
     // Save all predictions
@@ -1252,6 +1341,54 @@ app.post('/api/bracket/lock', auth, async(req,res)=>{
       'UPDATE bracket_predictions SET locked_at=NOW(),updated_at=NOW() WHERE avatar_id=$1',[avatarId])
     res.json({success:true})
   }catch(e){ res.status(500).json({error:'Error'}) }
+})
+
+// ─── BRACKET PÚBLICO — sin auth, rate-limited ────────────────────────────────
+app.post('/api/bracket/public-suggest', async(req,res)=>{
+  const {champion} = req.body
+  if(!champion) return res.status(400).json({error:'Selecciona un campeón'})
+  // Simple IP rate limit: max 5 brackets/hora por IP
+  const ip = req.ip||req.connection.remoteAddress||'unknown'
+  if(!global._bracketPubRate) global._bracketPubRate={}
+  const key = ip+':'+Math.floor(Date.now()/3600000)
+  global._bracketPubRate[key]=(global._bracketPubRate[key]||0)+1
+  if(global._bracketPubRate[key]>5) return res.status(429).json({error:'Límite alcanzado. Crea tu polla en lapollaia.com para más pronósticos.'})
+  const VALID=['Brazil','France','Argentina','England','Spain','Portugal','Germany','Uruguay','Colombia']
+  if(!VALID.includes(champion)) return res.status(400).json({error:'Campeón no válido'})
+  try{
+    const GROUPS={A:['Mexico','South Africa','Korea Republic','Czechia'],B:['Canada','Bosnia and Herzegovina','Qatar','Switzerland'],C:['Brazil','Morocco','Haiti','Scotland'],D:['USA','Paraguay','Australia','Turkey'],E:['Germany','Curaçao','Ivory Coast','Ecuador'],F:['Netherlands','Japan','Sweden','Tunisia'],G:['Belgium','Egypt','IR Iran','New Zealand'],H:['Spain','Cape Verde','Saudi Arabia','Uruguay'],I:['France','Senegal','Iraq','Norway'],J:['Argentina','Algeria','Austria','Jordan'],K:['Portugal','DR Congo','Uzbekistan','Colombia'],L:['England','Croatia','Ghana','Panama']}
+    const msg=await anthropic.messages.create({
+      model:'claude-sonnet-4-6',max_tokens:3200,
+      system:`Eres un experto en fútbol. Genera un bracket completo del Mundial FIFA 2026 donde ${champion} es CAMPEÓN.\nGRUPOS: ${JSON.stringify(GROUPS)}\nREGLAS: 1. ${champion} DEBE ganar la final. 2. Marcadores realistas (0-0 a 4-0). 3. Nombres en inglés exactos.\nResponde SOLO JSON válido sin markdown:\n{"round32":[{"match":1,"home":"T","away":"T","winner":"T","home_score":N,"away_score":N},...16 items],"round16":[...8],"quarters":[...4],"semis":[...2],"third":{"home":"T","away":"T","winner":"T","home_score":N,"away_score":N},"final":{"home":"T","away":"T","winner":"CHAMPION","home_score":N,"away_score":N},"champion":"CHAMPION"}`,
+      messages:[{role:'user',content:`Bracket completo. Campeón: ${champion}. Exactamente 16 en round32, 8 en round16, 4 en quarters, 2 en semis. Solo JSON.`}]
+    })
+    let text=msg.content[0].text.trim()
+    // Robust JSON extraction: strip markdown, find outermost {...}
+    text=text.replace(/```json|```/g,'').trim()
+    const m=text.match(/\{[\s\S]*\}/)
+    if(!m) throw new Error('No JSON found in response')
+    // Try progressive truncation if parse fails due to trailing content
+    let bracket
+    let jsonStr=m[0]
+    try{ bracket=JSON.parse(jsonStr) }catch(e1){
+      // Find last valid closing brace
+      let depth=0,lastValid=-1
+      for(let i=0;i<jsonStr.length;i++){
+        if(jsonStr[i]==='{')depth++
+        else if(jsonStr[i]==='}'){depth--;if(depth===0){lastValid=i;break}}
+      }
+      if(lastValid>0) bracket=JSON.parse(jsonStr.slice(0,lastValid+1))
+      else throw e1
+    }
+    const emptyM=i=>({match:i+1,home:'',away:'',winner:'',home_score:null,away_score:null})
+    const pad=(arr,len)=>{if(!Array.isArray(arr))arr=[];while(arr.length<len)arr.push(emptyM(arr.length));return arr.slice(0,len)}
+    bracket.round32=pad(bracket.round32,16);bracket.round16=pad(bracket.round16,8)
+    bracket.quarters=pad(bracket.quarters,4);bracket.semis=pad(bracket.semis,2)
+    if(!bracket.third)bracket.third={home:'',away:'',winner:'',home_score:0,away_score:0}
+    if(!bracket.final)bracket.final={home:'',away:'',winner:champion,home_score:1,away_score:0}
+    bracket.champion=champion;bracket.final.winner=champion
+    res.json({bracket})
+  }catch(e){console.error('public bracket:',e.message);res.status(500).json({error:'Error generando bracket: '+e.message})}
 })
 
 // AI bracket suggestion based on champion
@@ -1516,6 +1653,120 @@ app.post('/api/admin/results', auth, tournamentAdmin, async(req,res)=>{
   }catch(e){ console.error(e); res.status(500).json({error:'Error'}) }
 })
 
+// ─── TRIVIA ────────────────────────────────────────────────────────────────────
+
+// Get all trivia for tournament (admin view)
+app.get('/api/admin/trivia', auth, async(req,res)=>{
+  try{
+    const tid=req.user.tournamentId
+    const {rows}=await pool.query(`
+      SELECT tq.*,
+        COUNT(ta.id) as answer_count,
+        COUNT(ta.id) FILTER(WHERE ta.is_correct) as correct_count
+      FROM trivia_questions tq
+      LEFT JOIN trivia_answers ta ON ta.trivia_id=tq.id
+      WHERE tq.tournament_id=$1
+      GROUP BY tq.id ORDER BY tq.created_at DESC`,[tid])
+    res.json(rows)
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+// Create trivia question (admin)
+app.post('/api/admin/trivia', auth, async(req,res)=>{
+  if(!req.user.isAdmin) return res.status(403).json({error:'Solo admin'})
+  const {question,options,correct_answer,difficulty}=req.body
+  if(!question||!options||options.length<2||correct_answer==null) return res.status(400).json({error:'Datos incompletos'})
+  const pts={easy:2,medium:3,hard:4}[difficulty]||2
+  try{
+    const id='trv-'+crypto.randomBytes(8).toString('hex')
+    const {rows:[q]}=await pool.query(`
+      INSERT INTO trivia_questions(id,tournament_id,question,options,correct_answer,difficulty,points,created_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [id,req.user.tournamentId,question,JSON.stringify(options),correct_answer,difficulty||'easy',pts,req.user.id])
+    res.json(q)
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+// Delete trivia question (admin)
+app.delete('/api/admin/trivia/:id', auth, async(req,res)=>{
+  if(!req.user.isAdmin) return res.status(403).json({error:'Solo admin'})
+  try{
+    await pool.query('DELETE FROM trivia_questions WHERE id=$1 AND tournament_id=$2',[req.params.id,req.user.tournamentId])
+    res.json({success:true})
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+// Toggle trivia active/inactive
+app.put('/api/admin/trivia/:id/toggle', auth, async(req,res)=>{
+  if(!req.user.isAdmin) return res.status(403).json({error:'Solo admin'})
+  try{
+    const {rows:[q]}=await pool.query('SELECT is_active FROM trivia_questions WHERE id=$1',[req.params.id])
+    if(!q) return res.status(404).json({error:'No encontrada'})
+    await pool.query('UPDATE trivia_questions SET is_active=$1 WHERE id=$2',[!q.is_active,req.params.id])
+    res.json({is_active:!q.is_active})
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+// Pele IA: generate trivia question suggestion
+app.post('/api/admin/trivia/generate', auth, async(req,res)=>{
+  if(!req.user.isAdmin) return res.status(403).json({error:'Solo admin'})
+  const diff=req.body.difficulty||'easy'
+  const topicHint=req.body.topic||'futbol del Mundial 2026'
+  try{
+    const msg=await anthropic.messages.create({
+      model:'claude-sonnet-4-6',max_tokens:400,
+      system:'Eres Pele IA. Genera una pregunta de trivia de futbol en espanol. Responde SOLO JSON: {"question":"...","options":["A","B","C","D"],"correct_answer":0,"explanation":"..."} correct_answer es el indice 0-3 de la correcta. Sin markdown.',
+      messages:[{role:'user',content:'Genera pregunta de trivia. Dificultad: '+diff+'. Tema: '+topicHint+'. SOLO JSON.'}]
+    })
+    let text=msg.content[0].text.trim().replace(/```json|```/g,'').trim()
+    const m=text.match(/\{[\s\S]*\}/);if(m)text=m[0]
+    res.json(JSON.parse(text))
+  }catch(e){res.status(500).json({error:'Error generando: '+e.message})}
+})
+
+// Get trivia for user (unanswered, active questions for their avatar)
+app.get('/api/trivia/:avatarId', auth, async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT tq.id,tq.question,tq.options,tq.difficulty,tq.points
+      FROM trivia_questions tq
+      WHERE tq.tournament_id=$1 AND tq.is_active=TRUE
+        AND tq.id NOT IN (SELECT trivia_id FROM trivia_answers WHERE avatar_id=$2)
+      ORDER BY tq.created_at DESC`,
+      [req.user.tournamentId,req.params.avatarId])
+    res.json(rows)
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+// Submit trivia answer (one shot only)
+app.post('/api/trivia/:triviaId/answer', auth, async(req,res)=>{
+  const {avatarId,answerIdx}=req.body
+  if(answerIdx==null||!avatarId) return res.status(400).json({error:'Datos incompletos'})
+  try{
+    const {rows:[av]}=await pool.query('SELECT id FROM avatars WHERE id=$1 AND user_id=$2',[avatarId,req.user.id])
+    if(!av) return res.status(403).json({error:'Avatar no encontrado'})
+    const {rows:[q]}=await pool.query('SELECT * FROM trivia_questions WHERE id=$1 AND tournament_id=$2',[req.params.triviaId,req.user.tournamentId])
+    if(!q) return res.status(404).json({error:'Pregunta no encontrada'})
+    const {rows:[existing]}=await pool.query('SELECT id FROM trivia_answers WHERE trivia_id=$1 AND avatar_id=$2',[req.params.triviaId,avatarId])
+    if(existing) return res.status(400).json({error:'Ya respondiste esta pregunta'})
+    const isCorrect=parseInt(answerIdx)===q.correct_answer
+    const pts=isCorrect?q.points:0
+    const id='ta-'+crypto.randomBytes(8).toString('hex')
+    await pool.query('INSERT INTO trivia_answers(id,trivia_id,avatar_id,answer_idx,is_correct,points_earned) VALUES($1,$2,$3,$4,$5,$6)',
+      [id,q.id,avatarId,answerIdx,isCorrect,pts])
+    res.json({isCorrect,points_earned:pts,correct_answer:q.correct_answer})
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+// Registration bonus info
+app.get('/api/bonus/:avatarId', auth, async(req,res)=>{
+  try{
+    const {rows:[b]}=await pool.query('SELECT * FROM registration_bonus WHERE avatar_id=$1',[req.params.avatarId])
+    res.json(b||null)
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
+
 // ─── SUPER ADMIN (dueño de la plataforma) ────────────────────────────────────
 function superAdmin(req,res,next){
   const key=req.headers['x-super-key']||req.query.key
@@ -1605,6 +1856,50 @@ app.delete('/superadmin/users/:uid', superAdmin, async(req,res)=>{
     res.json({success:true})
   }catch(e){res.status(500).json({error:e.message})}
 })
+
+// ─── SUPERADMIN: CREATE COURTESY TOURNAMENT ───────────────────────────────────
+app.post('/superadmin/courtesy', superAdmin, async(req,res)=>{
+  const {name,ownerName,ownerEmail,slug}=req.body
+  if(!name||!ownerName||!ownerEmail) return res.status(400).json({error:'Faltan datos'})
+  try{
+    // Generate slug if not provided
+    const finalSlug=slug||(name.toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').slice(0,30)+'-'+crypto.randomBytes(3).toString('hex'))
+    const {rows:[existing]}=await pool.query('SELECT id FROM tournaments WHERE slug=$1',[finalSlug])
+    if(existing) return res.status(400).json({error:'Slug ya existe: '+finalSlug})
+
+    const tid='t-'+crypto.randomBytes(8).toString('hex')
+    const hash=await bcrypt.hash(crypto.randomBytes(12).toString('hex'),10)
+    const uid='u-'+crypto.randomBytes(8).toString('hex')
+
+    await pool.query(`INSERT INTO tournaments(id,slug,name,owner_name,owner_email,primary_color,inscription_fee,currency,is_active,is_courtesy)
+      VALUES($1,$2,$3,$4,$5,'#F6C90E',0,'USD',TRUE,TRUE)`,[tid,finalSlug,name,ownerName,ownerEmail])
+
+    const phases=['group','round32','round16','quarters','semis','third','final']
+    for(const ph of phases)
+      await pool.query('INSERT INTO phase_locks(tournament_id,phase) VALUES($1,$2) ON CONFLICT DO NOTHING',[tid,ph])
+
+    // Create admin user for the tournament
+    await pool.query('INSERT INTO users(id,tournament_id,name,email,password_hash,is_admin,terms_accepted) VALUES($1,$2,$3,$4,$5,TRUE,TRUE)',
+      [uid,tid,ownerName,ownerEmail.toLowerCase(),hash])
+
+    const link=`${process.env.APP_URL||'https://lapollaia.onrender.com'}/t/${finalSlug}`
+    res.json({success:true,tournamentId:tid,slug:finalSlug,link})
+  }catch(e){console.error('courtesy:',e);res.status(500).json({error:e.message})}
+})
+
+// SUPERADMIN: list courtesy tournaments
+app.get('/superadmin/courtesy', superAdmin, async(req,res)=>{
+  try{
+    const {rows}=await pool.query(`
+      SELECT t.id,t.slug,t.name,t.owner_name,t.owner_email,t.created_at,
+        COUNT(DISTINCT u.id) FILTER(WHERE u.is_admin=FALSE) as user_count
+      FROM tournaments t LEFT JOIN users u ON u.tournament_id=t.id
+      WHERE t.is_courtesy=TRUE
+      GROUP BY t.id ORDER BY t.created_at DESC`)
+    res.json(rows)
+  }catch(e){res.status(500).json({error:e.message})}
+})
+
 
 // Panel HTML del super admin
 app.get('/superadmin', superAdmin, async(req,res)=>{
@@ -1769,6 +2064,29 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:#EFEBE3;color:#1A1814
     <div class="stat"><div class="stat-n gold">$${revenue}</div><div class="stat-l">Ingresos USD</div></div>
   </div>
 
+  <!-- COURTESY SECTION -->
+  <div style="margin-bottom:1.5rem;background:var(--cream);border:1.5px solid var(--gold-border);border-radius:var(--r-lg);padding:1.25rem 1.5rem">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1rem">
+      <div style="font-size:1.3rem">🎁</div>
+      <div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:1px;color:var(--ink)">POLLAS DE CORTESÍA</div>
+        <div style="font-size:11px;color:var(--ink3)">Crea pollas gratuitas (sin pago) y comparte el link directo.</div>
+      </div>
+    </div>
+    <div id="courtesy-list" style="margin-bottom:1rem"><div style="font-size:12px;color:var(--ink3)">Cargando...</div></div>
+    <div style="background:var(--cream2);border:1px solid var(--border);border-radius:var(--r);padding:1rem" id="courtesy-form">
+      <div style="font-size:11px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:.75rem">Nueva polla de cortesía</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <input id="c-name" placeholder="Nombre de la polla (ej: Polla Familia García)" style="padding:8px 10px;border:1px solid var(--border2);border-radius:8px;font-size:12px;font-family:inherit"/>
+        <input id="c-slug" placeholder="slug-personalizado (opcional)" style="padding:8px 10px;border:1px solid var(--border2);border-radius:8px;font-size:12px;font-family:monospace"/>
+        <input id="c-owner" placeholder="Nombre del admin" style="padding:8px 10px;border:1px solid var(--border2);border-radius:8px;font-size:12px;font-family:inherit"/>
+        <input id="c-email" placeholder="Email del admin" style="padding:8px 10px;border:1px solid var(--border2);border-radius:8px;font-size:12px;font-family:inherit"/>
+      </div>
+      <button onclick="createCourtesy()" style="background:var(--gold);color:#fff;border:none;border-radius:8px;padding:8px 20px;font-size:12px;font-weight:700;cursor:pointer;width:100%">🎁 Crear polla gratis y generar link</button>
+      <div id="courtesy-result" style="margin-top:.75rem"></div>
+    </div>
+  </div>
+
   <div class="sec-label">Todas las pollas</div>
   <div class="t-table">
     <div class="t-head">
@@ -1884,6 +2202,65 @@ function backToList(){
   document.getElementById('list-view').classList.remove('hidden')
   document.getElementById('detail-view').classList.remove('on')
 }
+
+// ── Courtesy tournaments ─────────────────────────────────────────────────────
+async function loadCourtesy(){
+  try{
+    const r=await fetch('/superadmin/courtesy',{headers:{'x-super-key':KEY}})
+    const rows=await r.json()
+    const el=document.getElementById('courtesy-list')
+    if(!rows.length){el.innerHTML='<div style="font-size:12px;color:var(--ink3)">No hay pollas de cortesia aun.</div>';return}
+    el.innerHTML=rows.map(function(t){
+      var uc=t.user_count||0
+      var link='https://lapollaia.onrender.com/t/'+t.slug
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="font-size:12px;font-weight:700;color:var(--ink)">'+t.name+'</div>'+
+          '<div style="font-family:monospace;font-size:10px;color:var(--gold)">lapollaia.com/t/'+t.slug+'</div>'+
+        '</div>'+
+        '<div style="font-size:11px;'+(uc>0?'color:var(--green);font-weight:700':'color:var(--ink3)')+'">'+uc+' participantes</div>'+
+        '<button onclick="copyCourtesyLink(\''+link+'\')" style="background:var(--gold-bg);color:var(--gold);border:1px solid var(--gold-border);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer">Copiar link</button>'+
+        '<button onclick="delTournament(\''+t.id+'\',\''+t.name+'\')" style="background:var(--red-bg);color:var(--red);border:1px solid var(--red-border);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;cursor:pointer">Eliminar</button>'+
+      '</div>'
+    }).join('')
+  }catch(e){document.getElementById('courtesy-list').innerHTML='<div style="font-size:12px;color:red">Error: '+e.message+'</div>'}
+}
+
+async function createCourtesy(){
+  var name=document.getElementById('c-name').value.trim()
+  var slug=document.getElementById('c-slug').value.trim()
+  var ownerName=document.getElementById('c-owner').value.trim()
+  var ownerEmail=document.getElementById('c-email').value.trim()
+  var res_el=document.getElementById('courtesy-result')
+  if(!name||!ownerName||!ownerEmail){res_el.innerHTML='<div style="color:red;font-size:12px">Completa todos los campos requeridos</div>';return}
+  res_el.innerHTML='<div style="font-size:12px;color:var(--ink3)">Creando...</div>'
+  try{
+    var r=await fetch('/superadmin/courtesy',{method:'POST',headers:{'Content-Type':'application/json','x-super-key':KEY},body:JSON.stringify({name:name,slug:slug,ownerName:ownerName,ownerEmail:ownerEmail})})
+    var d=await r.json()
+    if(!r.ok){res_el.innerHTML='<div style="color:red;font-size:12px">Error: '+d.error+'</div>';return}
+    var link=d.link||('https://lapollaia.onrender.com/t/'+d.slug)
+    res_el.innerHTML='<div style="background:var(--green-bg);border:1px solid var(--green-border);border-radius:8px;padding:.75rem 1rem">'+
+      '<div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px">Polla creada exitosamente</div>'+
+      '<div id="courtesy-link-box" style="font-family:monospace;font-size:11px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--ink);word-break:break-all;margin-bottom:8px">'+link+'</div>'+
+      '<button onclick="copyCourtesyLink(\''+link+'\')" style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer">Copiar link</button>'+
+    '</div>'
+    document.getElementById('c-name').value=''
+    document.getElementById('c-slug').value=''
+    document.getElementById('c-owner').value=''
+    document.getElementById('c-email').value=''
+    loadCourtesy()
+  }catch(e){res_el.innerHTML='<div style="color:red;font-size:12px">Error: '+e.message+'</div>'}
+}
+
+function copyCourtesyLink(url){
+  navigator.clipboard.writeText(url).then(function(){
+    alert('Link copiado: '+url)
+  }).catch(function(){
+    prompt('Copia este link:',url)
+  })
+}
+
+loadCourtesy()
 </script>
 </body>
 </html>`)
